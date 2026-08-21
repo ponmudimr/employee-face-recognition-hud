@@ -11,6 +11,10 @@ models/*.prototxt
 enrollment/database/*
 !enrollment/database/.gitkeep
 
+# Test fixtures
+tests/fixtures/*
+!tests/fixtures/.gitkeep
+
 # Python cache & artifacts
 __pycache__/
 *.py[cod]

@@ -1,39 +1,47 @@
 # Face Recognition Models Directory
 
-This directory stores ONNX neural network model weights for face detection and embedding extraction optimized for ARM Cortex-A53 platforms (such as the Arduino UNO Q / Qualcomm Dragonwing QRB2210).
+This directory stores ONNX neural network model weights for face detection (YuNet) and feature embedding extraction (SFace) optimized for ARM Cortex-A53 platforms (such as the Arduino UNO Q / Qualcomm Dragonwing QRB2210).
 
-## Recommended Models
+## Model Download Instructions
 
-### 1. Face Detection
-- **YuNet ONNX Model (`face_detection_yunet_2023mar.onnx`)**
-  - Lightweight, high performance, designed for mobile/edge processors.
-  - Source: OpenCV Zoo
-  - Download link: [https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet)
-  - Direct Download:
-    ```bash
-    wget -O models/face_detection_yunet.onnx https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
-    ```
+Run the following `curl` (or `wget`) commands from the root directory of the repository to download both models from the official [OpenCV Zoo](https://github.com/opencv/opencv_zoo) repository:
 
-- **Res10 SSD Caffe / ONNX (`res10_300x300_ssd_iter_140000.caffemodel` or ONNX export)**
-  - Classic OpenCV DNN SSD face detector.
-  - Fast baseline model for low-resolution inputs.
+### 1. YuNet Face Detection Model
+Lightweight, high-performance face detector returning bounding boxes, confidence scores, and 5-point facial landmarks.
 
-### 2. Face Recognition / Embeddings
-- **SFace (`face_recognition_sface_2021dec.onnx`)**
-  - Lightweight embedding extractor outputting a 128-dimensional embedding vector.
-  - Source: OpenCV Zoo
-  - Download link: [https://github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface](https://github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface)
-  - Direct Download:
-    ```bash
-    wget -O models/face_recognition_sface.onnx https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx
-    ```
+```bash
+curl -L -o models/face_detection_yunet.onnx https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
+```
 
-- **MobileFaceNet ONNX (`mobilefacenet.onnx`)**
-  - Extremely compact MobileNet architecture trained for ArcFace cosine loss.
-  - Outputs 512-dimensional or 128-dimensional embedding vectors.
+*Alternative using `wget`:*
+```bash
+wget -O models/face_detection_yunet.onnx https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
+```
 
-## Installation Instructions
+### 2. SFace Face Recognition Model
+Compact feature extractor outputting a 128-dimensional embedding vector per face.
 
-1. Download your chosen `.onnx` model files into this directory (`models/`).
-2. Update the model file path constants in `src/detect.py` and `src/recognize.py` if custom filenames are used.
-3. Note: `.onnx`, `.caffemodel`, and `.pb` files in this directory are git-ignored by default.
+```bash
+curl -L -o models/face_recognition_sface.onnx https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx
+```
+
+*Alternative using `wget`:*
+```bash
+wget -O models/face_recognition_sface.onnx https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx
+```
+
+---
+
+## File Verification
+
+After downloading, verify the files exist in `models/`:
+
+```bash
+ls -l models/*.onnx
+```
+
+Expected files:
+- `models/face_detection_yunet.onnx` (~230 KB)
+- `models/face_recognition_sface.onnx` (~37 MB)
+
+*Note: All `.onnx` weight files in this directory are excluded from Git tracking via `.gitignore`.*
