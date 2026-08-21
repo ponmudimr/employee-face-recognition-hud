@@ -1,0 +1,22 @@
+[Unit]
+Description=Employee Face Recognition HUD Service
+After=multi-user.target graphical.target sound.target
+Wants=graphical.target
+
+[Service]
+Type=simple
+User=mrponmudi
+WorkingDirectory=/home/mrponmudi/GIT/employee-face-recognition-hud
+Environment=PYTHONUNBUFFERED=1
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/mrponmudi/.Xauthority
+
+# Command to execute main pipeline
+ExecStart=/usr/bin/python3 /home/mrponmudi/GIT/employee-face-recognition-hud/src/main.py --camera 0
+
+# Restart policy for resilience during system bring-up or power loss
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=graphical.target

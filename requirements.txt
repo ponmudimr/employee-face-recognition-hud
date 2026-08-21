@@ -1,0 +1,9 @@
+# Core computer vision and numerical processing
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# Lightweight neural network inference engine for ARM Cortex-A53
+onnxruntime>=1.15.0
+
+# Testing framework
+pytest>=7.0.0
