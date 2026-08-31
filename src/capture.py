@@ -33,28 +33,15 @@ class DepthAICapture:
         logger.info("Attempting to initialize Luxonis OAK-D-Lite camera via DepthAI...")
         try:
             pipeline = dai.Pipeline()
-            try:
-                cam_rgb = pipeline.createColorCamera()
-                xout_rgb = pipeline.createXLinkOut()
-            except (AttributeError, Exception):
-                try:
-                    cam_rgb = pipeline.create(dai.node.ColorCamera)
-                    xout_rgb = pipeline.create(dai.node.XLinkOut)
-                except (AttributeError, Exception):
-                    cam_rgb = pipeline.create(dai.node.Camera)
-                    xout_rgb = pipeline.create(dai.node.XLinkOut)
-
-            xout_rgb.setStreamName("rgb")
+            cam_rgb = pipeline.create(dai.node.ColorCamera)
 
             cam_rgb.setPreviewSize(self.width, self.height)
             cam_rgb.setInterleaved(False)
             cam_rgb.setColorOrder(dai.ColorCameraProperties.ColorOrder.BGR)
             cam_rgb.setFps(self.fps)
 
-            cam_rgb.preview.link(xout_rgb.input)
-
             self.device = dai.Device(pipeline)
-            self.q_rgb = self.device.getOutputQueue(name="rgb", maxSize=4, blocking=False)
+            self.q_rgb = self.device.getOutputQueue(cam_rgb.preview, maxSize=4, blocking=False)
             logger.info(f"OAK-D-Lite (DepthAI) initialized ({self.width}x{self.height} @ {self.fps} FPS).")
             return True
         except Exception as e:
