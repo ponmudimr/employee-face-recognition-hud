@@ -107,12 +107,18 @@ class WebcamCapture:
         Returns:
             bool: True if camera successfully opened, False otherwise.
         """
-        # If device_index is -1 or depthai is requested/available, try OAK-D-Lite first
-        if self.device_index == -1 or (HAS_DEPTHAI and self.device_index < 0):
+        # If device_index is -1 or depthai is requested/available, try OAK-D-Lite
+        if self.device_index < 0:
+            if not HAS_DEPTHAI:
+                logger.error("DepthAI library is not installed. Cannot open OAK-D-Lite camera.")
+                return False
             self.oak_cap = DepthAICapture(width=self.width, height=self.height, fps=self.fps)
             if self.oak_cap.open():
                 return True
+            self.oak_cap.release()
             self.oak_cap = None
+            logger.error("Failed to open OAK-D-Lite camera via DepthAI.")
+            return False
 
         logger.info(f"Attempting to open V4L2 camera device index {self.device_index}...")
         try:
@@ -129,11 +135,12 @@ class WebcamCapture:
             logger.warning(f"Error opening V4L2 camera {self.device_index}: {e}")
 
         # Fallback to OAK-D-Lite if V4L2 failed and DepthAI is installed
-        if HAS_DEPTHAI and self.oak_cap is None:
+        if HAS_DEPTHAI:
             logger.info("V4L2 camera unavailable. Attempting DepthAI OAK-D-Lite fallback...")
             self.oak_cap = DepthAICapture(width=self.width, height=self.height, fps=self.fps)
             if self.oak_cap.open():
                 return True
+            self.oak_cap.release()
             self.oak_cap = None
 
         logger.error("No valid camera stream (V4L2 webcam or OAK-D-Lite) could be opened.")
