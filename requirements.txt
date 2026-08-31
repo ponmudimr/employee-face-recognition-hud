@@ -5,5 +5,6 @@ numpy>=1.24.0
 # Lightweight neural network inference engine for ARM Cortex-A53
 onnxruntime>=1.15.0
 
-# Testing framework
+# Luxonis OAK-D-Lite camera SDK support
+depthai>=2.20.0
 pytest>=7.0.0

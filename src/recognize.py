@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import sys
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import cv2
 import numpy as np
 
