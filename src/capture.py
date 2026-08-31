@@ -122,13 +122,31 @@ class WebcamCapture:
 
         logger.info(f"Attempting to open V4L2 camera device index {self.device_index}...")
         try:
-            self.cap = cv2.VideoCapture(self.device_index)
+            # Force V4L2 backend to bypass broken GStreamer pipelines
+            self.cap = cv2.VideoCapture(self.device_index, cv2.CAP_V4L2)
+            if not self.cap.isOpened():
+                self.cap = cv2.VideoCapture(self.device_index)
+
             if self.cap.isOpened():
+                # Set FOURCC to MJPG for 1080p USB webcams if supported
+                self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
                 self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
                 self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
                 self.cap.set(cv2.CAP_PROP_FPS, self.fps)
-                logger.info(f"Webcam {self.device_index} initialized ({self.width}x{self.height} @ {self.fps} FPS).")
-                return True
+
+                # Warmup read to ensure stream is producing valid frames
+                for _ in range(5):
+                    ret, test_frame = self.cap.read()
+                    if ret and test_frame is not None:
+                        logger.info(f"Webcam {self.device_index} initialized ({test_frame.shape[1]}x{test_frame.shape[0]} @ {self.fps} FPS).")
+                        return True
+
+                logger.warning(f"Webcam {self.device_index} opened but failed warmup frame reads. Trying YUYV format...")
+                self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'YUYV'))
+                ret, test_frame = self.cap.read()
+                if ret and test_frame is not None:
+                    logger.info(f"Webcam {self.device_index} initialized with YUYV ({test_frame.shape[1]}x{test_frame.shape[0]}).")
+                    return True
 
             logger.warning(f"Failed to open V4L2 device /dev/video{self.device_index}.")
         except Exception as e:
