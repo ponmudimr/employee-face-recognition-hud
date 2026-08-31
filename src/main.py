@@ -52,7 +52,7 @@ class PipelineManager:
         self,
         camera_index: int = 0,
         db_path: str = "enrollment/database/employees.json",
-        detect_interval: int = 10,
+        detect_interval: int = 3,
         similarity_threshold: float = 0.5,
         no_display: bool = False
     ) -> None:

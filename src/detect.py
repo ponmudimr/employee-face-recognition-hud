@@ -73,9 +73,9 @@ class FaceDetector:
     def __init__(
         self,
         model_path: str = "models/face_detection_yunet.onnx",
-        confidence_threshold: float = 0.6,
+        confidence_threshold: float = 0.45,
         nms_threshold: float = 0.3,
-        target_size: Optional[Tuple[int, int]] = (320, 240)
+        target_size: Optional[Tuple[int, int]] = (640, 480)
     ) -> None:
         """Initialize YuNet face detector configuration.
 
