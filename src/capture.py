@@ -40,7 +40,12 @@ class DepthAICapture:
             cam_rgb.setColorOrder(dai.ColorCameraProperties.ColorOrder.BGR)
             cam_rgb.setFps(self.fps)
 
-            self.device = dai.Device(pipeline)
+            try:
+                self.device = dai.Device(pipeline)
+            except Exception:
+                self.device = dai.Device()
+                self.device.startPipeline(pipeline)
+
             self.q_rgb = self.device.getOutputQueue(cam_rgb.preview, maxSize=4, blocking=False)
             logger.info(f"OAK-D-Lite (DepthAI) initialized ({self.width}x{self.height} @ {self.fps} FPS).")
             return True
