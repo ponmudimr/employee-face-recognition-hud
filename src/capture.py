@@ -32,15 +32,16 @@ class DepthAICapture:
 
         logger.info("Attempting to initialize Luxonis OAK-D-Lite camera via DepthAI...")
         try:
+            # Use legacy V2 pipeline creation methods for better compatibility
             pipeline = dai.Pipeline()
-            cam_rgb = pipeline.create(dai.node.ColorCamera)
+            cam_rgb = pipeline.createColorCamera()
 
             cam_rgb.setPreviewSize(self.width, self.height)
             cam_rgb.setInterleaved(False)
             cam_rgb.setColorOrder(dai.ColorCameraProperties.ColorOrder.BGR)
             cam_rgb.setFps(self.fps)
 
-            # Enable continuous autofocus for OAK-D-Lite-AF (autofocus variant)
+            # Enable continuous autofocus for OAK-D-Lite-AF
             try:
                 if hasattr(dai, "CameraControl") and hasattr(dai.CameraControl, "AutoFocusMode"):
                     cam_rgb.initialControl.setAutoFocusMode(dai.CameraControl.AutoFocusMode.CONTINUOUS_VIDEO)
@@ -50,8 +51,8 @@ class DepthAICapture:
             except Exception as af_err:
                 logger.debug(f"Autofocus notice: {af_err}")
 
-            # Create XLinkOut node to get frames to host (required in V2 API)
-            xout_rgb = pipeline.create(dai.node.XLinkOut)
+            # Create XLinkOut node to get frames to host
+            xout_rgb = pipeline.createXLinkOut()
             xout_rgb.setStreamName("rgb")
             cam_rgb.preview.link(xout_rgb.input)
 
@@ -63,7 +64,7 @@ class DepthAICapture:
             return True
         except Exception as e:
             logger.error(f"Failed to open OAK-D-Lite camera via DepthAI: {e}")
-            if hasattr(self, 'device') and self.device is not None:
+            if hasattr(self, 'device') and getattr(self, 'device', None) is not None:
                 self.device.close()
             return False
 
@@ -88,12 +89,21 @@ class DepthAICapture:
     def release(self) -> None:
         if self.device is not None:
             try:
+                # Drain queue before closing device to prevent MyriadX watchdog crash
+                if self.q_rgb is not None:
+                    while self.q_rgb.has():
+                        self.q_rgb.get()
+            except Exception:
+                pass
+            try:
                 self.device.close()
             except Exception:
                 pass
             self.device = None
             self.q_rgb = None
             logger.info("OAK-D-Lite (DepthAI) device released.")
+
+
 
 
 class WebcamCapture:
