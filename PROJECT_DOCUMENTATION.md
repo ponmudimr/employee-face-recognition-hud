@@ -205,3 +205,9 @@ pytest tests/
 - **Commit `9c4e2ee`**: Switched primary camera default to Luxonis OAK-D-Lite-AF (`--camera -1`) and enabled continuous video autofocus (`AutoFocusMode.CONTINUOUS_VIDEO`).
 - **Commit `06d53e8`**: Fixed `NameError: name 'DEFAULT_MATCH_THRESHOLD' is not defined` by importing `DEFAULT_MATCH_THRESHOLD` from `recognize` module into `src/main.py`.
 - **Commit `c681cf8`**: Registered `atexit` and `signal` (`SIGINT`/`SIGTERM`) hardware release handlers in `src/main.py` to guarantee `device.close()` / `release()` runs on any exit or kill signal, preventing recurring `X_LINK_DEVICE_ALREADY_IN_USE` USB lockups. Verified live on board (31.7 FPS, clean shutdown).
+
+### DepthAI V2 vs V3 Compatibility Fixes
+- Addressed a critical `X_LINK_DEVICE_ALREADY_IN_USE` lockup error that occurred due to a V2 API mismatch with DepthAI `3.9.0`.
+- Pinned `depthai>=2.20.0,<3.0.0.0` in `requirements.txt` to strictly enforce the V2 API, which correctly supports RVC2 hardware like the OAK-D-Lite-AF.
+- Re-architected `DepthAICapture` pipeline instantiation to mirror stable implementations from legacy projects (using `createColorCamera()` instead of `create(dai.node.ColorCamera)`) to bypass unresolved firmware crashes in mixed V2 environments.
+- Implemented robust shutdown hooks (`while self.q_rgb.has(): self.q_rgb.get()`) to thoroughly drain the `XLinkOut` message queue before executing `device.close()`. This successfully mitigates the MyriadX Watchdog `ErrorId 9001` hardware fault, which previously locked the camera requiring a manual physical USB power-cycle.
