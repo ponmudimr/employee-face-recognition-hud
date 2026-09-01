@@ -191,4 +191,4 @@ pytest tests/
 - `PERSUSGFILES/`: Added hardware 3D CAD STEP files & Gerber PCB files for Arduino UNO Q enclosure (`ABX00162`).
 - `PROJECT_DOCUMENTATION.md`: Exhaustive project documentation and engineering log.
 - **Commit `1c0188e`**: Added capture, detect, recognize, main pipeline modules & CAD files to `origin/main`.
-- **Latest Fix**: Enabled OpenCV SFace 5-point facial landmark alignment (`alignCrop`) during face feature extraction in `src/main.py` and `enrollment/enroll.py` for higher matching accuracy. Adjusted default similarity threshold to `0.363`.
+- **Commit `157d8ba`**: Fixed recognition threshold default (`0.363`) and enabled OpenCV SFace 5-point facial landmark alignment (`alignCrop`) during feature extraction in `src/main.py` and `enrollment/enroll.py` for accurate matching. Verified live on board (29.2 FPS, 87% match confidence).
