@@ -181,10 +181,12 @@ pytest tests/
 
 ---
 
-## 5. Summary of Modified Project Files
+## 5. Summary of Modified Project Files & Commit History
 - `src/capture.py`: Dual-camera capture manager (OAK-D DepthAI + V4L2 MJPEG fallback + display window).
 - `src/detect.py`: YuNet face detector wrapper (threshold `0.45`, resolution `640x480`).
 - `src/recognize.py`: SFace face embedding extractor, cosine similarity matcher, fixed `Tuple` import.
 - `src/main.py`: Real-time pipeline orchestrator linking capture, detection (`interval=3`), recognition, tracking, and HUD overlay.
 - `requirements.txt`: Project dependencies including `depthai>=2.20.0`.
+- `PERSUSGFILES/`: Added hardware 3D CAD STEP files & Gerber PCB files for Arduino UNO Q enclosure (`ABX00162`).
 - `PROJECT_DOCUMENTATION.md`: Exhaustive project documentation and engineering log.
+- **Commit `1c0188e`**: Added capture, detect, recognize, main pipeline modules & CAD files to `origin/main`.
