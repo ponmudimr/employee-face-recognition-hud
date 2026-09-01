@@ -1,7 +1,9 @@
 """Main real-time face recognition HUD pipeline orchestrator for Arduino UNO Q / ARM Cortex-A53."""
 
 import argparse
+import atexit
 import logging
+import signal
 import sys
 import time
 from typing import List, Dict, Any, Optional
@@ -95,6 +97,19 @@ class PipelineManager:
                 "Check USB webcam connection, power, and kernel V4L2 drivers."
             )
             sys.exit(1)
+
+        # Register robust cleanup handlers for exit / SIGINT / SIGTERM
+        def _on_signal(signum, frame):
+            logger.info(f"Signal {signum} received. Cleaning up hardware resources...")
+            self.cleanup()
+            sys.exit(0)
+
+        try:
+            signal.signal(signal.SIGINT, _on_signal)
+            signal.signal(signal.SIGTERM, _on_signal)
+        except (ValueError, Exception):
+            pass
+        atexit.register(self.cleanup)
 
         # Initialize display if not headless mode
         if self.display is not None:

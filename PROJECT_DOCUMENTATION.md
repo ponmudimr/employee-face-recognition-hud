@@ -203,4 +203,5 @@ pytest tests/
 - **Commit `1c0188e`**: Added capture, detect, recognize, main pipeline modules & CAD files to `origin/main`.
 - **Commit `157d8ba`**: Fixed recognition threshold default (`0.363`) and enabled OpenCV SFace 5-point facial landmark alignment (`alignCrop`).
 - **Commit `9c4e2ee`**: Switched primary camera default to Luxonis OAK-D-Lite-AF (`--camera -1`) and enabled continuous video autofocus (`AutoFocusMode.CONTINUOUS_VIDEO`).
-- **Commit `06d53e8`**: Fixed `NameError: name 'DEFAULT_MATCH_THRESHOLD' is not defined` by importing `DEFAULT_MATCH_THRESHOLD` from `recognize` module into `src/main.py`. Verified live on board (31.7 FPS, 89% match score).
+- **Commit `06d53e8`**: Fixed `NameError: name 'DEFAULT_MATCH_THRESHOLD' is not defined` by importing `DEFAULT_MATCH_THRESHOLD` from `recognize` module into `src/main.py`.
+- **Robust Cleanup Fix**: Registered `atexit` and `signal` (`SIGINT`/`SIGTERM`) hardware release handlers in `src/main.py` to guarantee `device.close()` / `release()` runs on any exit or kill signal, preventing recurring `X_LINK_DEVICE_ALREADY_IN_USE` USB lockups.
