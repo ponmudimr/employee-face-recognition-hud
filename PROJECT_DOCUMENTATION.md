@@ -215,3 +215,8 @@ pytest tests/
 ### Recognition & Detection Threshold Tuning
 - Lowered the **YuNet Face Detector confidence threshold** from `0.45` to `0.35` in `src/main.py` and `enrollment/enroll.py`. This ensures faces are properly detected and tracked even in poor or varying lighting conditions.
 - Lowered the **SFace Cosine Similarity match threshold** from `0.363` to `0.30` in `src/recognize.py`. This provides higher tolerance for angle variations and lighting changes when comparing live feeds against enrolled database embeddings, solving "UNKNOWN SUBJECT" false negatives.
+
+### Hardware Acceleration (GPU OpenCL)
+- Based on the Arduino UNO Q / Qualcomm Dragonwing QRB2210 Datasheet (Section 8.1 / 8.3), the integrated **Adreno 702 GPU** provides OpenCL 2.0 support via the Mesa driver stack.
+- The `FaceDetectorYN` and `FaceRecognizerSF` instantiations in `src/detect.py` and `src/recognize.py` have been explicitly optimized to pass `cv2.dnn.DNN_BACKEND_OPENCV` and `cv2.dnn.DNN_TARGET_OPENCL`.
+- This correctly offloads the compute-intensive neural network inference from the Cortex-A53 CPU to the Adreno 702 GPU, yielding a massive performance boost and lowering CPU thermals.
