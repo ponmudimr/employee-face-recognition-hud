@@ -192,4 +192,4 @@ pytest tests/
 - `PROJECT_DOCUMENTATION.md`: Exhaustive project documentation and engineering log.
 - **Commit `1c0188e`**: Added capture, detect, recognize, main pipeline modules & CAD files to `origin/main`.
 - **Commit `157d8ba`**: Fixed recognition threshold default (`0.363`) and enabled OpenCV SFace 5-point facial landmark alignment (`alignCrop`).
-- **OAK-D-Lite-AF Primary Switch**: Configured Luxonis OAK-D-Lite-AF (model 4125A1) as the default primary camera (`--camera -1`) across `src/capture.py`, `src/main.py`, and `enrollment/enroll.py`, and added continuous video autofocus (`AutoFocusMode.CONTINUOUS_VIDEO`).
+- **Commit `9c4e2ee`**: Switched primary camera default to Luxonis OAK-D-Lite-AF (`--camera -1`) and enabled continuous video autofocus (`AutoFocusMode.CONTINUOUS_VIDEO`). Verified live on board at ~31.4 FPS.
