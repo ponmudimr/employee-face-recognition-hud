@@ -11,8 +11,8 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# SFace published default cosine similarity match threshold
-DEFAULT_MATCH_THRESHOLD = 0.363
+# Cosine similarity threshold for SFace (original was 0.363, lowered to 0.30 for better tolerance)
+DEFAULT_MATCH_THRESHOLD = 0.30
 
 
 def cosine_similarity(v1: np.ndarray, v2: np.ndarray) -> float:

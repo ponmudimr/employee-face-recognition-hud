@@ -122,7 +122,8 @@ def enroll_employee(
     display = DisplayWindow(window_name="Employee Enrollment HUD", fullscreen=False)
     display.create()
 
-    detector = FaceDetector()
+    # Lowered confidence threshold to 0.35 to catch faces easier during enrollment
+    detector = FaceDetector(confidence_threshold=0.35)
     recognizer = FaceRecognizer()
 
     embeddings: List[np.ndarray] = []

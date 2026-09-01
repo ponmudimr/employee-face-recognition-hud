@@ -75,8 +75,10 @@ class PipelineManager:
 
         self.cap = WebcamCapture(device_index=self.camera_index)
         self.display = DisplayWindow(fullscreen=True) if not self.no_display else None
-        self.detector = FaceDetector()
-        self.recognizer = FaceRecognizer()
+        
+        # Lowered confidence threshold from 0.45 to 0.35 to improve detection in poor lighting
+        self.detector = FaceDetector(confidence_threshold=0.35)
+        self.recognizer = FaceRecognizer(match_threshold=self.similarity_threshold)
 
         self.database: List[Dict[str, Any]] = []
         self.tracked_faces: List[Dict[str, Any]] = []
