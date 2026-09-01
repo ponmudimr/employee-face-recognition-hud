@@ -50,9 +50,8 @@ class DepthAICapture:
             except Exception as af_err:
                 logger.debug(f"Autofocus notice: {af_err}")
 
-            # Initialize device and start pipeline (DepthAI 3.9.0+ API)
-            self.device = dai.Device()
-            self.device.startPipeline(pipeline)
+            # Initialize device and start pipeline (DepthAI 2.x API for RVC2)
+            self.device = dai.Device(pipeline)
 
             self.q_rgb = self.device.getOutputQueue(cam_rgb.preview, maxSize=4, blocking=False)
             logger.info(f"OAK-D-Lite-AF (DepthAI) initialized ({self.width}x{self.height} @ {self.fps} FPS).")

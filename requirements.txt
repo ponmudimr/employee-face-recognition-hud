@@ -6,5 +6,5 @@ numpy>=1.24.0
 onnxruntime>=1.15.0
 
 # Luxonis OAK-D-Lite camera SDK support
-depthai>=2.20.0
+depthai>=2.20.0,<3.0.0.0
 pytest>=7.0.0
