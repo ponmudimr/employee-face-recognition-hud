@@ -40,6 +40,16 @@ class DepthAICapture:
             cam_rgb.setColorOrder(dai.ColorCameraProperties.ColorOrder.BGR)
             cam_rgb.setFps(self.fps)
 
+            # Enable continuous autofocus for OAK-D-Lite-AF (autofocus variant)
+            try:
+                if hasattr(dai, "CameraControl") and hasattr(dai.CameraControl, "AutoFocusMode"):
+                    cam_rgb.initialControl.setAutoFocusMode(dai.CameraControl.AutoFocusMode.CONTINUOUS_VIDEO)
+                elif hasattr(dai, "RawCameraControl") and hasattr(dai.RawCameraControl, "AutoFocusMode"):
+                    cam_rgb.initialControl.setAutoFocusMode(dai.RawCameraControl.AutoFocusMode.CONTINUOUS_VIDEO)
+                logger.info("Continuous autofocus (AF) enabled for OAK-D-Lite-AF.")
+            except Exception as af_err:
+                logger.debug(f"Autofocus notice: {af_err}")
+
             try:
                 self.device = dai.Device(pipeline)
             except Exception:
@@ -47,7 +57,7 @@ class DepthAICapture:
                 self.device.startPipeline(pipeline)
 
             self.q_rgb = self.device.getOutputQueue(cam_rgb.preview, maxSize=4, blocking=False)
-            logger.info(f"OAK-D-Lite (DepthAI) initialized ({self.width}x{self.height} @ {self.fps} FPS).")
+            logger.info(f"OAK-D-Lite-AF (DepthAI) initialized ({self.width}x{self.height} @ {self.fps} FPS).")
             return True
         except Exception as e:
             logger.error(f"Failed to open OAK-D-Lite camera via DepthAI: {e}")
@@ -85,11 +95,11 @@ class DepthAICapture:
 class WebcamCapture:
     """Wrapper around OpenCV VideoCapture or DepthAI for reading camera streams cleanly."""
 
-    def __init__(self, device_index: int = 0, width: int = 640, height: int = 480, fps: int = 30) -> None:
+    def __init__(self, device_index: int = -1, width: int = 640, height: int = 480, fps: int = 30) -> None:
         """Initialize webcam device.
 
         Args:
-            device_index: V4L2 device index (-1 for OAK-D / DepthAI, >=0 for V4L2 webcam).
+            device_index: V4L2 device index (-1 for OAK-D-Lite primary default, >=0 for V4L2 webcam).
             width: Frame capture width.
             height: Frame capture height.
             fps: Frame rate target.

@@ -226,7 +226,7 @@ def main() -> None:
     parser.add_argument("--name", type=str, help="Employee Full Name")
     parser.add_argument("--role", type=str, help="Employee Role / Job Title")
     parser.add_argument("--samples", type=int, default=5, help="Number of photo samples to capture (default: 5)")
-    parser.add_argument("--camera", type=int, default=0, help="V4L2 camera index (default: 0)")
+    parser.add_argument("--camera", type=int, default=-1, help="Camera device index (-1 for OAK-D-Lite primary default, >=0 for V4L2 webcam)")
     parser.add_argument("--db", type=str, default="enrollment/database/employees.json", help="Database file output path")
 
     args = parser.parse_args()

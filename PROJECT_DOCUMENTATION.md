@@ -182,13 +182,14 @@ pytest tests/
 ---
 
 ## 5. Summary of Modified Project Files & Commit History
-- `src/capture.py`: Dual-camera capture manager (OAK-D DepthAI + V4L2 MJPEG fallback + display window).
+- `src/capture.py`: Primary camera capture manager (OAK-D-Lite-AF DepthAI default + continuous autofocus `setAutoFocusMode` + V4L2 MJPEG fallback + display window).
 - `src/detect.py`: YuNet face detector wrapper (threshold `0.45`, resolution `640x480`).
 - `src/recognize.py`: SFace face embedding extractor, cosine similarity matcher, fixed `Tuple` import.
-- `src/main.py`: Real-time pipeline orchestrator linking capture, detection (`interval=3`), recognition, landmark alignment, tracking, and HUD overlay.
-- `enrollment/enroll.py`: Employee enrollment tool (captures samples with 5-point landmark alignment).
+- `src/main.py`: Real-time pipeline orchestrator linking capture (OAK-D-Lite default), detection (`interval=3`), recognition, landmark alignment, tracking, and HUD overlay.
+- `enrollment/enroll.py`: Employee enrollment tool (defaults to OAK-D-Lite primary camera with 5-point landmark alignment).
 - `requirements.txt`: Project dependencies including `depthai>=2.20.0`.
-- `PERSUSGFILES/`: Added hardware 3D CAD STEP files & Gerber PCB files for Arduino UNO Q enclosure (`ABX00162`).
+- `PERSUSGFILES/`: Hardware 3D CAD STEP files & Gerber PCB files for Arduino UNO Q enclosure (`ABX00162`).
 - `PROJECT_DOCUMENTATION.md`: Exhaustive project documentation and engineering log.
 - **Commit `1c0188e`**: Added capture, detect, recognize, main pipeline modules & CAD files to `origin/main`.
-- **Commit `157d8ba`**: Fixed recognition threshold default (`0.363`) and enabled OpenCV SFace 5-point facial landmark alignment (`alignCrop`) during feature extraction in `src/main.py` and `enrollment/enroll.py` for accurate matching. Verified live on board (29.2 FPS, 87% match confidence).
+- **Commit `157d8ba`**: Fixed recognition threshold default (`0.363`) and enabled OpenCV SFace 5-point facial landmark alignment (`alignCrop`).
+- **OAK-D-Lite-AF Primary Switch**: Configured Luxonis OAK-D-Lite-AF (model 4125A1) as the default primary camera (`--camera -1`) across `src/capture.py`, `src/main.py`, and `enrollment/enroll.py`, and added continuous video autofocus (`AutoFocusMode.CONTINUOUS_VIDEO`).

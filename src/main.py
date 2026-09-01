@@ -233,8 +233,8 @@ def main() -> None:
         description="Real-Time Employee Face Recognition HUD for Arduino UNO Q (ARM Cortex-A53)"
     )
     parser.add_argument(
-        "--camera", type=int, default=0,
-        help="V4L2 camera device index (default: 0 for /dev/video0)"
+        "--camera", type=int, default=-1,
+        help="Camera device index (-1 for OAK-D-Lite primary default, >=0 for V4L2 webcam)"
     )
     parser.add_argument(
         "--db", type=str, default="enrollment/database/employees.json",
