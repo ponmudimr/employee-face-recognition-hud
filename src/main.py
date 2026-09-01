@@ -53,7 +53,7 @@ class PipelineManager:
         camera_index: int = 0,
         db_path: str = "enrollment/database/employees.json",
         detect_interval: int = 3,
-        similarity_threshold: float = 0.5,
+        similarity_threshold: float = DEFAULT_MATCH_THRESHOLD,
         no_display: bool = False
     ) -> None:
         """Initialize pipeline components.
@@ -161,16 +161,16 @@ class PipelineManager:
 
         img_h, img_w = frame.shape[:2]
 
-        for (x, y, w, h, score) in detections:
+        for face_det in detections:
+            x, y, w, h, score = face_det
             # Clamp coordinates to frame boundaries
             x1, y1 = max(0, x), max(0, y)
             x2, y2 = min(img_w, x + w), min(img_h, y + h)
 
-            face_crop = frame[y1:y2, x1:x2]
             match_info = None
 
-            if face_crop.size > 0:
-                embedding = self.recognizer.extract_embedding(face_crop)
+            if x2 > x1 and y2 > y1:
+                embedding = self.recognizer.extract_embedding(frame, face_det)
                 match_info = match_face(embedding, self.database, threshold=self.similarity_threshold)
 
             tracked_entry = {
@@ -241,12 +241,12 @@ def main() -> None:
         help="Path to employee JSON database file"
     )
     parser.add_argument(
-        "--detect-interval", type=int, default=10,
-        help="Interval N frames between running face detection models (default: 10)"
+        "--detect-interval", type=int, default=3,
+        help="Interval N frames between running face detection models (default: 3)"
     )
     parser.add_argument(
-        "--threshold", type=float, default=0.5,
-        help="Cosine similarity threshold for employee recognition (default: 0.5)"
+        "--threshold", type=float, default=DEFAULT_MATCH_THRESHOLD,
+        help=f"Cosine similarity threshold for employee recognition (default: {DEFAULT_MATCH_THRESHOLD})"
     )
     parser.add_argument(
         "--no-display", action="store_true",

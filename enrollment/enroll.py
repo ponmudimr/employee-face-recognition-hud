@@ -183,7 +183,16 @@ def enroll_employee(
                     rw, rh = int(img_w * 0.4), int(img_h * 0.4)
                     face_crop = frame[max(0, cy - rh):min(img_h, cy + rh), max(0, cx - rw):min(img_w, cx + rw)]
 
-                if face_crop.size > 0:
+                if detections:
+                    emb = recognizer.extract_embedding(frame, detections[0])
+                    embeddings.append(emb)
+                    captured_count += 1
+                    logger.info(f"Captured sample {captured_count}/{num_samples}.")
+                    # Visual feedback flash
+                    cv2.rectangle(display_frame, (0, 0), (img_w, img_h), (0, 255, 0), 10)
+                    display.show(display_frame)
+                    cv2.waitKey(200)
+                elif face_crop.size > 0:
                     emb = recognizer.extract_embedding(face_crop)
                     embeddings.append(emb)
                     captured_count += 1
