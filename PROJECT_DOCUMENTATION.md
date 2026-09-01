@@ -147,6 +147,16 @@ Below is the complete record of every technical challenge, root cause, exact err
 
 ---
 
+### 🐛 Bug #11: `NameError: name 'DEFAULT_MATCH_THRESHOLD' is not defined` in `src/main.py`
+- **Symptom:** `src/main.py` failed on startup with `NameError: name 'DEFAULT_MATCH_THRESHOLD' is not defined` in `PipelineManager.__init__`.
+- **Root Cause:** `DEFAULT_MATCH_THRESHOLD` is defined in `src/recognize.py` (`DEFAULT_MATCH_THRESHOLD = 0.363`), but was missing from the import line in `src/main.py`.
+- **Resolution:** Added `DEFAULT_MATCH_THRESHOLD` to the `recognize` module import in `src/main.py`:
+  ```python
+  from recognize import FaceRecognizer, load_database, match_face, DEFAULT_MATCH_THRESHOLD
+  ```
+
+---
+
 ## 4. Complete CLI Command Reference
 
 ### 4.1 Check Video Devices

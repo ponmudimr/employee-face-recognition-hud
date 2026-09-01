@@ -10,7 +10,7 @@ import numpy as np
 
 from capture import WebcamCapture, DisplayWindow
 from detect import FaceDetector
-from recognize import FaceRecognizer, load_database, match_face
+from recognize import FaceRecognizer, load_database, match_face, DEFAULT_MATCH_THRESHOLD
 from overlay import draw_overlay
 
 # Configure structured logging
