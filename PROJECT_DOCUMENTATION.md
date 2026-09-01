@@ -211,3 +211,7 @@ pytest tests/
 - Pinned `depthai>=2.20.0,<3.0.0.0` in `requirements.txt` to strictly enforce the V2 API, which correctly supports RVC2 hardware like the OAK-D-Lite-AF.
 - Re-architected `DepthAICapture` pipeline instantiation to mirror stable implementations from legacy projects (using `createColorCamera()` instead of `create(dai.node.ColorCamera)`) to bypass unresolved firmware crashes in mixed V2 environments.
 - Implemented robust shutdown hooks (`while self.q_rgb.has(): self.q_rgb.get()`) to thoroughly drain the `XLinkOut` message queue before executing `device.close()`. This successfully mitigates the MyriadX Watchdog `ErrorId 9001` hardware fault, which previously locked the camera requiring a manual physical USB power-cycle.
+
+### Recognition & Detection Threshold Tuning
+- Lowered the **YuNet Face Detector confidence threshold** from `0.45` to `0.35` in `src/main.py` and `enrollment/enroll.py`. This ensures faces are properly detected and tracked even in poor or varying lighting conditions.
+- Lowered the **SFace Cosine Similarity match threshold** from `0.363` to `0.30` in `src/recognize.py`. This provides higher tolerance for angle variations and lighting changes when comparing live feeds against enrolled database embeddings, solving "UNKNOWN SUBJECT" false negatives.
