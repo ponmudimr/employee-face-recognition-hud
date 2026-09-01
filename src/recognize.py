@@ -148,7 +148,12 @@ class FaceRecognizer:
 
         try:
             if hasattr(cv2, "FaceRecognizerSF"):
-                self.recognizer = cv2.FaceRecognizerSF.create(self.model_path, "")
+                self.recognizer = cv2.FaceRecognizerSF.create(
+                    self.model_path,
+                    "",
+                    cv2.dnn.DNN_BACKEND_OPENCV,
+                    cv2.dnn.DNN_TARGET_OPENCL
+                )
                 self._is_loaded = True
                 logger.info(f"SFace recognizer model loaded successfully from '{self.model_path}'.")
                 return True
