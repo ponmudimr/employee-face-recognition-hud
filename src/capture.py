@@ -50,14 +50,21 @@ class DepthAICapture:
             except Exception as af_err:
                 logger.debug(f"Autofocus notice: {af_err}")
 
+            # Create XLinkOut node to get frames to host (required in V2 API)
+            xout_rgb = pipeline.create(dai.node.XLinkOut)
+            xout_rgb.setStreamName("rgb")
+            cam_rgb.preview.link(xout_rgb.input)
+
             # Initialize device and start pipeline (DepthAI 2.x API for RVC2)
             self.device = dai.Device(pipeline)
 
-            self.q_rgb = self.device.getOutputQueue(cam_rgb.preview, maxSize=4, blocking=False)
+            self.q_rgb = self.device.getOutputQueue(name="rgb", maxSize=4, blocking=False)
             logger.info(f"OAK-D-Lite-AF (DepthAI) initialized ({self.width}x{self.height} @ {self.fps} FPS).")
             return True
         except Exception as e:
             logger.error(f"Failed to open OAK-D-Lite camera via DepthAI: {e}")
+            if hasattr(self, 'device') and self.device is not None:
+                self.device.close()
             return False
 
     def is_opened(self) -> bool:
