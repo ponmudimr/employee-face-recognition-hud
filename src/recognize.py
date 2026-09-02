@@ -152,7 +152,7 @@ class FaceRecognizer:
                     self.model_path,
                     "",
                     cv2.dnn.DNN_BACKEND_OPENCV,
-                    cv2.dnn.DNN_TARGET_OPENCL
+                    cv2.dnn.DNN_TARGET_CPU
                 )
                 self._is_loaded = True
                 logger.info(f"SFace recognizer model loaded successfully from '{self.model_path}'.")

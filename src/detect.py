@@ -122,7 +122,7 @@ class FaceDetector:
                     self.nms_threshold,
                     5000,
                     cv2.dnn.DNN_BACKEND_OPENCV,
-                    cv2.dnn.DNN_TARGET_OPENCL
+                    cv2.dnn.DNN_TARGET_CPU
                 )
                 self._current_input_size = initial_input_size
                 self._is_loaded = True
