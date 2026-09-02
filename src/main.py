@@ -1,3 +1,5 @@
+import cv2
+cv2.setNumThreads(4)
 """Main real-time face recognition HUD pipeline orchestrator for Arduino UNO Q / ARM Cortex-A53."""
 
 import argparse
@@ -25,28 +27,7 @@ logger = logging.getLogger("HUD-Main")
 
 
 def create_opencv_tracker() -> Optional[Any]:
-    """Factory helper to create an OpenCV face tracker (CSRT or KCF) across OpenCV versions.
-
-    Returns:
-        Tracker instance or None if tracking module unavailable in OpenCV build.
-    """
-    tracker_factories = [
-        getattr(cv2, "TrackerKCF_create", None),
-        getattr(cv2, "TrackerCSRT_create", None),
-        getattr(getattr(cv2, "legacy", None), "TrackerKCF_create", None),
-    ]
-
-    for factory in tracker_factories:
-        if factory is not None:
-            try:
-                return factory()
-            except Exception:
-                pass
-
-    logger.warning("OpenCV tracker factory unavailable in current cv2 build; tracking fallback active.")
-    return None
-
-
+    return cv2.legacy.TrackerMOSSE_create() if hasattr(cv2, "legacy") and hasattr(cv2.legacy, "TrackerMOSSE_create") else None
 class PipelineManager:
     """Orchestrates video capture, downscaled detection, embedding recognition, object tracking, and HUD output."""
 
@@ -128,10 +109,24 @@ class PipelineManager:
 
         logger.info("Pipeline loop started. Press 'q' or Ctrl+C to stop.")
 
+
+        self.prof_read = []
+        self.prof_det = []
+        self.prof_rec = []
+        self.prof_trk = []
+        self.prof_draw = []
+        self.prof_disp = []
+        self.det_count = 0
+        self.trk_count = 0
+
         try:
             while True:
-                loop_start = time.time()
+                t_start = time.perf_counter()
+                
+                t0 = time.perf_counter()
                 ret, frame = self.cap.read()
+                t1 = time.perf_counter()
+                self.prof_read.append((t1 - t0) * 1000)
 
                 if not ret or frame is None:
                     logger.error("Webcam read timeout or disconnected. Waiting for stream recovery...")
@@ -142,29 +137,86 @@ class PipelineManager:
 
                 # Step 1: Detect & Recognize every N frames; Track in between
                 if frame_count % self.detect_interval == 0 or not self.tracked_faces:
-                    self._run_detection_and_recognition(frame)
+                    self.det_count += 1
+                    t0 = time.perf_counter()
+                    
+                    detections = self.detector.detect(frame)
+                    t_det_end = time.perf_counter()
+                    self.prof_det.append((t_det_end - t0) * 1000)
+                    
+                    self.tracked_faces.clear()
+                    self.trackers.clear()
+                    img_h, img_w = frame.shape[:2]
+                    
+                    for face_det in detections:
+                        x, y, w, h, score = face_det
+                        x1, y1 = max(0, x), max(0, y)
+                        x2, y2 = min(img_w, x + w), min(img_h, y + h)
+                        match_info = None
+                        if x2 > x1 and y2 > y1:
+                            t_rec_start = time.perf_counter()
+                            embedding = self.recognizer.extract_embedding(frame, face_det)
+                            match_info = match_face(embedding, self.database, threshold=self.similarity_threshold)
+                            self.prof_rec.append((time.perf_counter() - t_rec_start) * 1000)
+                        
+                        tracked_entry = {"bbox": (x1, y1, x2 - x1, y2 - y1), "match": match_info}
+                        tracker = create_opencv_tracker()
+                        if tracker is not None:
+                            try:
+                                tracker.init(frame, (x1, y1, x2 - x1, y2 - y1))
+                                self.trackers.append(tracker)
+                            except Exception as e:
+                                self.trackers.append(None)
+                        else:
+                            self.trackers.append(None)
+                        self.tracked_faces.append(tracked_entry)
+                        
                 else:
+                    self.trk_count += 1
+                    t0 = time.perf_counter()
                     self._run_tracking(frame)
+                    self.prof_trk.append((time.perf_counter() - t0) * 1000)
 
                 # Step 2: Calculate real-time FPS
                 elapsed = time.time() - start_time
                 if elapsed >= 1.0:
                     fps = frame_count / elapsed
-                    logger.info(f"Performance: {fps:.1f} FPS | Active Tracked Faces: {len(self.tracked_faces)}")
                     frame_count = 0
                     start_time = time.time()
+                    
+                    if len(self.prof_read) >= 30:
+                        logger.info(f"--- PROFILING OVER 30 FRAMES ---")
+                        def p_stat(name, arr):
+                            if not arr: return "N/A"
+                            return f"min: {min(arr):.1f}ms | max: {max(arr):.1f}ms | avg: {sum(arr)/len(arr):.1f}ms"
+                        logger.info(f"READ:  {p_stat('READ', self.prof_read)}")
+                        logger.info(f"DET :  {p_stat('DET', self.prof_det)}")
+                        logger.info(f"REC :  {p_stat('REC', self.prof_rec)}")
+                        logger.info(f"TRK :  {p_stat('TRK', self.prof_trk)}")
+                        logger.info(f"DRAW:  {p_stat('DRAW', self.prof_draw)}")
+                        logger.info(f"DISP:  {p_stat('DISP', self.prof_disp)}")
+                        logger.info(f"COUNTS -> Detects: {self.det_count} | Tracks: {self.trk_count}")
+                        self.prof_read.clear(); self.prof_det.clear(); self.prof_rec.clear()
+                        self.prof_trk.clear(); self.prof_draw.clear(); self.prof_disp.clear()
+                        self.det_count = 0; self.trk_count = 0
 
                 # Step 3: Draw HUD graphics overlay
+                t0 = time.perf_counter()
                 output_frame = draw_overlay(frame, self.tracked_faces, fps=fps)
+                self.prof_draw.append((time.perf_counter() - t0) * 1000)
 
-                # Step 4: Output to HDMI/USB-C AR glass display window
+                # Step 4: Output to display
+                t0 = time.perf_counter()
                 if self.display is not None:
                     self.display.show(output_frame)
                     key = self.display.poll_key(delay_ms=1)
-                    if key == ord('q') or key == 27:  # 'q' or ESC
-                        logger.info("Quit key received. Shutting down pipeline.")
+                    if key == ord('q') or key == 27:
                         break
-
+                self.prof_disp.append((time.perf_counter() - t0) * 1000)
+                
+                # We stop after 150 frames to simulate 15 seconds at 10 fps or something
+                # Or just run for 15 seconds
+                
         except KeyboardInterrupt:
             logger.info("Interrupt signal received. Exiting HUD pipeline.")
         finally:
