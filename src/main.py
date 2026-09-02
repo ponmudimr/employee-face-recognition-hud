@@ -27,7 +27,7 @@ logger = logging.getLogger("HUD-Main")
 
 
 def create_opencv_tracker() -> Optional[Any]:
-    return cv2.legacy.TrackerMOSSE_create() if hasattr(cv2, "legacy") and hasattr(cv2.legacy, "TrackerMOSSE_create") else None
+    return cv2.TrackerCSRT_create() if hasattr(cv2, "TrackerCSRT_create") else cv2.legacy.TrackerCSRT_create() if hasattr(cv2, "legacy") else None
 class PipelineManager:
     """Orchestrates video capture, downscaled detection, embedding recognition, object tracking, and HUD output."""
 
@@ -64,6 +64,7 @@ class PipelineManager:
         self.database: List[Dict[str, Any]] = []
         self.tracked_faces: List[Dict[str, Any]] = []
         self.trackers: List[Any] = []
+        self.pipeline_frame_count = 0
 
     def start(self) -> None:
         """Execute the real-time face recognition pipeline loop."""
@@ -136,7 +137,8 @@ class PipelineManager:
                 frame_count += 1
 
                 # Step 1: Detect & Recognize every N frames; Track in between
-                if frame_count % self.detect_interval == 0 or not self.tracked_faces:
+                self.pipeline_frame_count += 1
+                if self.pipeline_frame_count % self.detect_interval == 0 or not self.tracked_faces:
                     self.det_count += 1
                     t0 = time.perf_counter()
                     
@@ -262,10 +264,8 @@ class PipelineManager:
             self.tracked_faces.append(tracked_entry)
 
     def _run_tracking(self, frame: np.ndarray) -> None:
-        """Update bounding boxes using OpenCV CSRT/KCF tracker for frames between detections."""
         updated_faces = []
         updated_trackers = []
-
         for i, tracker in enumerate(self.trackers):
             face_data = self.tracked_faces[i]
             if tracker is not None:
@@ -276,17 +276,12 @@ class PipelineManager:
                         face_data["bbox"] = (x, y, w, h)
                         updated_faces.append(face_data)
                         updated_trackers.append(tracker)
-                        continue
+                    else:
+                        logger.debug(f"Tracker update FAILED for face at frame {self.pipeline_frame_count}")
                 except Exception as e:
                     logger.debug(f"Tracker update error: {e}")
-
-            # Keep previous bbox if tracking failed
-            updated_faces.append(face_data)
-            updated_trackers.append(None)
-
         self.tracked_faces = updated_faces
         self.trackers = updated_trackers
-
     def cleanup(self) -> None:
         """Release hardware capture and display resources cleanly."""
         logger.info("Cleaning up pipeline hardware resources...")
