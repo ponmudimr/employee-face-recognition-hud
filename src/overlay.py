@@ -53,16 +53,19 @@ def draw_hud_card(
     cv2.line(frame, (x + w, y + h), (x + w - line_len, y + h), accent_color, thickness)
     cv2.line(frame, (x + w, y + h), (x + w, y + h - line_len), accent_color, thickness)
 
-    # Info card box dimensions
-    card_w = max(180, w + 40)
-    card_h = 70 if is_known else 35
+    img_h, img_w = frame.shape[:2]
+    scale_factor = img_w / 640.0
+    
+    # Scale box and font dynamically based on resolution
+    base_w = int(max(180 * scale_factor, w + (40 * scale_factor)))
+    card_w = base_w
+    card_h = int(70 * scale_factor) if is_known else int(35 * scale_factor)
     card_x = max(5, x)
-    card_y = max(5, y - card_h - 10)
+    card_y = max(5, y - card_h - int(10 * scale_factor))
 
     # Ensure card fits within frame bounds
-    img_h, img_w = frame.shape[:2]
     if card_y < 0:
-        card_y = y + h + 10
+        card_y = y + h + int(10 * scale_factor)
     if card_x + card_w > img_w:
         card_x = max(5, img_w - card_w - 5)
 
@@ -81,32 +84,28 @@ def draw_hud_card(
         (card_x, card_y),
         (card_x + card_w, card_y + card_h),
         accent_color,
-        1
+        int(1 * scale_factor) or 1
     )
 
     # Draw text lines inside info card
     font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.45
+    font_scale = 0.45 * scale_factor
+    th = int(1 * scale_factor) or 1
 
     if is_known:
-        cv2.putText(frame, f"NAME: {name}", (card_x + 8, card_y + 18), font, font_scale, COLOR_WHITE, 1)
-        cv2.putText(frame, f"ROLE: {role}", (card_x + 8, card_y + 36), font, font_scale, COLOR_CYAN, 1)
-        cv2.putText(frame, f"ID: {emp_id} | {int(similarity * 100)}%", (card_x + 8, card_y + 54), font, font_scale, COLOR_GREEN, 1)
+        cv2.putText(frame, f"NAME: {name}", (card_x + int(8*scale_factor), card_y + int(18*scale_factor)), font, font_scale, COLOR_WHITE, th)
+        cv2.putText(frame, f"ROLE: {role}", (card_x + int(8*scale_factor), card_y + int(36*scale_factor)), font, font_scale, COLOR_CYAN, th)
+        cv2.putText(frame, f"ID: {emp_id} | {int(similarity * 100)}%", (card_x + int(8*scale_factor), card_y + int(54*scale_factor)), font, font_scale, COLOR_GREEN, th)
     else:
-        cv2.putText(frame, "UNKNOWN SUBJECT", (card_x + 8, card_y + 22), font, font_scale, COLOR_AMBER, 1)
+        cv2.putText(frame, "UNKNOWN SUBJECT", (card_x + int(8*scale_factor), card_y + int(22*scale_factor)), font, font_scale, COLOR_AMBER, th)
 
 
 def draw_fps_counter(frame: np.ndarray, fps: float) -> None:
-    """Draw real-time FPS metric in the top corner of the frame.
-
-    Args:
-        frame: Image array to draw onto.
-        fps: Calculated frames-per-second rate.
-    """
+    img_h, img_w = frame.shape[:2]
+    scale_factor = img_w / 640.0
     fps_text = f"HUD FPS: {fps:.1f}"
     font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.5
-    cv2.putText(frame, fps_text, (15, 25), font, font_scale, COLOR_GREEN, 1, cv2.LINE_AA)
+    cv2.putText(frame, fps_text, (int(15*scale_factor), int(25*scale_factor)), font, 0.5 * scale_factor, COLOR_GREEN, int(1 * scale_factor) or 1, cv2.LINE_AA)
 
 
 def draw_overlay(
