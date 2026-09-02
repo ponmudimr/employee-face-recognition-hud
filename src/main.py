@@ -250,19 +250,19 @@ class PipelineManager:
         updated_trackers = []
         with self.thread_lock:
             for i, tracker in enumerate(self.trackers):
-            face_data = self.tracked_faces[i]
-            if tracker is not None:
-                try:
-                    success, box = tracker.update(frame)
-                    if success:
-                        x, y, w, h = [int(v) for v in box]
-                        face_data["bbox"] = (x, y, w, h)
-                        updated_faces.append(face_data)
-                        updated_trackers.append(tracker)
-                    else:
-                        logger.debug(f"Tracker update FAILED for face at frame {self.pipeline_frame_count}")
-                except Exception as e:
-                    logger.debug(f"Tracker update error: {e}")
+                face_data = self.tracked_faces[i]
+                if tracker is not None:
+                    try:
+                        success, box = tracker.update(frame)
+                        if success:
+                            x, y, w, h = [int(v) for v in box]
+                            face_data["bbox"] = (x, y, w, h)
+                            updated_faces.append(face_data)
+                            updated_trackers.append(tracker)
+                        else:
+                            logger.debug(f"Tracker update FAILED for face at frame {self.pipeline_frame_count}")
+                    except Exception as e:
+                        logger.debug(f"Tracker update error: {e}")
             self.tracked_faces = updated_faces
             self.trackers = updated_trackers
     def cleanup(self) -> None:
