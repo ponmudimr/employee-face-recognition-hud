@@ -27,7 +27,7 @@ logger = logging.getLogger("HUD-Main")
 
 
 def create_opencv_tracker() -> Optional[Any]:
-    return cv2.TrackerCSRT_create() if hasattr(cv2, "TrackerCSRT_create") else cv2.legacy.TrackerCSRT_create() if hasattr(cv2, "legacy") else None
+    return cv2.legacy.TrackerMOSSE_create() if hasattr(cv2, "legacy") and hasattr(cv2.legacy, "TrackerMOSSE_create") else cv2.TrackerKCF_create() if hasattr(cv2, "TrackerKCF_create") else None
 class PipelineManager:
     """Orchestrates video capture, downscaled detection, embedding recognition, object tracking, and HUD output."""
 
