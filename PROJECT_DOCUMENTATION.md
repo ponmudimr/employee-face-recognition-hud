@@ -224,3 +224,11 @@ pytest tests/
 ### Performance Note (September 2)
 - Reverted the `DNN_TARGET_OPENCL` optimizations back to `DNN_TARGET_CPU`.
 - On the Qualcomm Dragonwing QRB2210 running Debian, the OpenCV OpenCL backend incurs massive memory copy overhead between the CPU and GPU (lack of zero-copy buffers), causing the FPS to drop from 30 FPS to 1.6 FPS. The Cortex-A53 cores handle the YuNet model much faster natively.
+
+### Performance Note (September 2 - Later)
+- Discovered that scaling to multiple faces (`--max-faces 3`) caused severe micro-stuttering because SFace embedding math takes ~100ms per face (so 3 faces = ~300ms freeze per detection cycle).
+- **Resolution:** Re-architected the main pipeline (`src/main.py`) to utilize **Asynchronous Threading**.
+  - The heavy detection and recognition operations (YuNet + SFace) are now offloaded to a background daemon thread.
+  - The main display loop exclusively runs the lightweight MOSSE tracker.
+  - This fully decouples the camera display framerate from the AI compute time, eliminating the 300ms visual stutters entirely and maintaining a smooth 30 FPS display even with multiple people in frame.
+  - Tracker was permanently swapped to `cv2.legacy.TrackerMOSSE_create()` as CSRT was too heavy (~100ms) on the Cortex-A53 without hardware acceleration.
