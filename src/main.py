@@ -61,7 +61,7 @@ class PipelineManager:
         self.display = DisplayWindow(fullscreen=True) if not self.no_display else None
         
         # Lowered confidence threshold from 0.45 to 0.35 to improve detection in poor lighting
-        self.detector = FaceDetector(confidence_threshold=0.35)
+        self.detector = FaceDetector(confidence_threshold=0.60)
         self.recognizer = FaceRecognizer(match_threshold=self.similarity_threshold)
 
         self.database: List[Dict[str, Any]] = []
