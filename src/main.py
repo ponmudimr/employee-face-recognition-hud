@@ -8,6 +8,7 @@ import logging
 import signal
 import sys
 import time
+import threading
 from typing import List, Dict, Any, Optional
 import cv2
 import numpy as np
@@ -67,6 +68,8 @@ class PipelineManager:
         self.tracked_faces: List[Dict[str, Any]] = []
         self.trackers: List[Any] = []
         self.pipeline_frame_count = 0
+        self.thread_lock = threading.Lock()
+        self.detect_thread = None
 
     def start(self) -> None:
         """Execute the real-time face recognition pipeline loop."""
@@ -138,51 +141,21 @@ class PipelineManager:
 
                 frame_count += 1
 
-                # Step 1: Detect & Recognize every N frames; Track in between
+                # Step 1: Always run tracking to maintain smooth 30 FPS display
+                self.trk_count += 1
+                t0 = time.perf_counter()
+                self._run_tracking(frame)
+                self.prof_trk.append((time.perf_counter() - t0) * 1000)
+
+                # Step 2: Spawn background thread for heavy Detection/Recognition if needed
                 self.pipeline_frame_count += 1
                 if self.pipeline_frame_count % self.detect_interval == 0 or not self.tracked_faces:
-                    self.det_count += 1
-                    t0 = time.perf_counter()
-                    
-                    detections = self.detector.detect(frame)
-                    if detections:
-                        # Cap to N largest faces to bound maximum CPU time (Option A)
-                        detections = sorted(detections, key=lambda d: d.w * d.h, reverse=True)[:self.max_faces]
-                    t_det_end = time.perf_counter()
-                    self.prof_det.append((t_det_end - t0) * 1000)
-                    
-                    self.tracked_faces.clear()
-                    self.trackers.clear()
-                    img_h, img_w = frame.shape[:2]
-                    
-                    for face_det in detections:
-                        x, y, w, h, score = face_det
-                        x1, y1 = max(0, x), max(0, y)
-                        x2, y2 = min(img_w, x + w), min(img_h, y + h)
-                        match_info = None
-                        if x2 > x1 and y2 > y1:
-                            t_rec_start = time.perf_counter()
-                            embedding = self.recognizer.extract_embedding(frame, face_det)
-                            match_info = match_face(embedding, self.database, threshold=self.similarity_threshold)
-                            self.prof_rec.append((time.perf_counter() - t_rec_start) * 1000)
-                        
-                        tracked_entry = {"bbox": (x1, y1, x2 - x1, y2 - y1), "match": match_info}
-                        tracker = create_opencv_tracker()
-                        if tracker is not None:
-                            try:
-                                tracker.init(frame, (x1, y1, x2 - x1, y2 - y1))
-                                self.trackers.append(tracker)
-                            except Exception as e:
-                                self.trackers.append(None)
-                        else:
-                            self.trackers.append(None)
-                        self.tracked_faces.append(tracked_entry)
-                        
-                else:
-                    self.trk_count += 1
-                    t0 = time.perf_counter()
-                    self._run_tracking(frame)
-                    self.prof_trk.append((time.perf_counter() - t0) * 1000)
+                    if self.detect_thread is None or not self.detect_thread.is_alive():
+                        self.det_count += 1
+                        async_frame = frame.copy()
+                        self.detect_thread = threading.Thread(target=self._run_detection_and_recognition, args=(async_frame,))
+                        self.detect_thread.daemon = True
+                        self.detect_thread.start()
 
                 # Step 2: Calculate real-time FPS
                 elapsed = time.time() - start_time
@@ -209,7 +182,9 @@ class PipelineManager:
 
                 # Step 3: Draw HUD graphics overlay
                 t0 = time.perf_counter()
-                output_frame = draw_overlay(frame, self.tracked_faces, fps=fps)
+                with self.thread_lock:
+                    safe_faces = list(self.tracked_faces)
+                output_frame = draw_overlay(frame, safe_faces, fps=fps)
                 self.prof_draw.append((time.perf_counter() - t0) * 1000)
 
                 # Step 4: Output to display
@@ -230,51 +205,51 @@ class PipelineManager:
             self.cleanup()
 
     def _run_detection_and_recognition(self, frame: np.ndarray) -> None:
-        """Execute face detection and embedding recognition step."""
+        """Execute face detection and embedding recognition asynchronously."""
+        t0 = time.perf_counter()
         detections = self.detector.detect(frame)
         if detections:
-            # Cap to N largest faces to bound maximum CPU time (Option A)
             detections = sorted(detections, key=lambda d: d.w * d.h, reverse=True)[:self.max_faces]
-        self.tracked_faces.clear()
-        self.trackers.clear()
+        self.prof_det.append((time.perf_counter() - t0) * 1000)
 
+        new_tracked_faces = []
+        new_trackers = []
         img_h, img_w = frame.shape[:2]
 
         for face_det in detections:
             x, y, w, h, score = face_det
-            # Clamp coordinates to frame boundaries
             x1, y1 = max(0, x), max(0, y)
             x2, y2 = min(img_w, x + w), min(img_h, y + h)
 
             match_info = None
-
             if x2 > x1 and y2 > y1:
+                t_rec = time.perf_counter()
                 embedding = self.recognizer.extract_embedding(frame, face_det)
                 match_info = match_face(embedding, self.database, threshold=self.similarity_threshold)
+                self.prof_rec.append((time.perf_counter() - t_rec) * 1000)
 
-            tracked_entry = {
-                "bbox": (x1, y1, x2 - x1, y2 - y1),
-                "match": match_info
-            }
+            tracked_entry = {"bbox": (x1, y1, x2 - x1, y2 - y1), "match": match_info}
 
-            # Initialize tracking object for non-detection frames
             tracker = create_opencv_tracker()
             if tracker is not None:
                 try:
                     tracker.init(frame, (x1, y1, x2 - x1, y2 - y1))
-                    self.trackers.append(tracker)
-                except Exception as e:
-                    logger.debug(f"Tracker init failed: {e}")
-                    self.trackers.append(None)
+                    new_trackers.append(tracker)
+                except Exception:
+                    new_trackers.append(None)
             else:
-                self.trackers.append(None)
+                new_trackers.append(None)
+            new_tracked_faces.append(tracked_entry)
 
-            self.tracked_faces.append(tracked_entry)
+        with self.thread_lock:
+            self.tracked_faces = new_tracked_faces
+            self.trackers = new_trackers
 
     def _run_tracking(self, frame: np.ndarray) -> None:
         updated_faces = []
         updated_trackers = []
-        for i, tracker in enumerate(self.trackers):
+        with self.thread_lock:
+            for i, tracker in enumerate(self.trackers):
             face_data = self.tracked_faces[i]
             if tracker is not None:
                 try:
@@ -288,8 +263,8 @@ class PipelineManager:
                         logger.debug(f"Tracker update FAILED for face at frame {self.pipeline_frame_count}")
                 except Exception as e:
                     logger.debug(f"Tracker update error: {e}")
-        self.tracked_faces = updated_faces
-        self.trackers = updated_trackers
+            self.tracked_faces = updated_faces
+            self.trackers = updated_trackers
     def cleanup(self) -> None:
         """Release hardware capture and display resources cleanly."""
         logger.info("Cleaning up pipeline hardware resources...")
