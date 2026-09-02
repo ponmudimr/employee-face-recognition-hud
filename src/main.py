@@ -37,6 +37,7 @@ class PipelineManager:
         db_path: str = "enrollment/database/employees.json",
         detect_interval: int = 3,
         similarity_threshold: float = DEFAULT_MATCH_THRESHOLD,
+        max_faces: int = 3,
         no_display: bool = False
     ) -> None:
         """Initialize pipeline components.
@@ -52,6 +53,7 @@ class PipelineManager:
         self.db_path = db_path
         self.detect_interval = max(1, detect_interval)
         self.similarity_threshold = similarity_threshold
+        self.max_faces = max_faces
         self.no_display = no_display
 
         self.cap = WebcamCapture(device_index=self.camera_index)
@@ -143,6 +145,9 @@ class PipelineManager:
                     t0 = time.perf_counter()
                     
                     detections = self.detector.detect(frame)
+                    if detections:
+                        # Cap to N largest faces to bound maximum CPU time (Option A)
+                        detections = sorted(detections, key=lambda d: d.w * d.h, reverse=True)[:self.max_faces]
                     t_det_end = time.perf_counter()
                     self.prof_det.append((t_det_end - t0) * 1000)
                     
@@ -227,6 +232,9 @@ class PipelineManager:
     def _run_detection_and_recognition(self, frame: np.ndarray) -> None:
         """Execute face detection and embedding recognition step."""
         detections = self.detector.detect(frame)
+        if detections:
+            # Cap to N largest faces to bound maximum CPU time (Option A)
+            detections = sorted(detections, key=lambda d: d.w * d.h, reverse=True)[:self.max_faces]
         self.tracked_faces.clear()
         self.trackers.clear()
 
@@ -313,6 +321,10 @@ def main() -> None:
         help=f"Cosine similarity threshold for employee recognition (default: {DEFAULT_MATCH_THRESHOLD})"
     )
     parser.add_argument(
+        "--max-faces", type=int, default=3,
+        help="Maximum number of largest faces to track simultaneously to maintain FPS (default: 3)"
+    )
+    parser.add_argument(
         "--no-display", action="store_true",
         help="Disable HDMI/USB-C GUI window (headless mode)"
     )
@@ -324,6 +336,7 @@ def main() -> None:
         db_path=args.db,
         detect_interval=args.detect_interval,
         similarity_threshold=args.threshold,
+        max_faces=args.max_faces,
         no_display=args.no_display
     )
     pipeline.start()
