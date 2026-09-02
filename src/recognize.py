@@ -99,10 +99,15 @@ def match_face(
 
         db_emb_array = np.array(db_emb, dtype=np.float32)
         sim = cosine_similarity(embedding, db_emb_array)
+        
+        logger.debug(f"  vs {record.get('name', 'Unknown')}: score={sim:.3f}")
 
         if sim > best_similarity:
             best_similarity = sim
             best_match = record
+            
+    if best_match is not None:
+        logger.debug(f"  WINNER: {best_match.get('name', 'Unknown')} score={best_similarity:.3f} threshold={threshold}")
 
     if best_match is not None and best_similarity >= threshold:
         match_info = dict(best_match)
