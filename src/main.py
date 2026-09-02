@@ -39,7 +39,9 @@ class PipelineManager:
         detect_interval: int = 3,
         similarity_threshold: float = DEFAULT_MATCH_THRESHOLD,
         max_faces: int = 3,
-        no_display: bool = False
+        no_display: bool = False,
+        width: int = 640,
+        height: int = 480
     ) -> None:
         """Initialize pipeline components.
 
@@ -57,11 +59,11 @@ class PipelineManager:
         self.max_faces = max_faces
         self.no_display = no_display
 
-        self.cap = WebcamCapture(device_index=self.camera_index)
+        self.cap = WebcamCapture(device_index=self.camera_index, width=width, height=height)
         self.display = DisplayWindow(fullscreen=True) if not self.no_display else None
         
         # Lowered confidence threshold from 0.45 to 0.35 to improve detection in poor lighting
-        self.detector = FaceDetector(confidence_threshold=0.60)
+        self.detector = FaceDetector(confidence_threshold=0.60, target_size=(width, height))
         self.recognizer = FaceRecognizer(match_threshold=self.similarity_threshold)
 
         self.database: List[Dict[str, Any]] = []
@@ -303,6 +305,14 @@ def main() -> None:
         "--no-display", action="store_true",
         help="Disable HDMI/USB-C GUI window (headless mode)"
     )
+    parser.add_argument(
+        "--width", type=int, default=640,
+        help="Camera capture width (increase to 1280 for far-away faces)"
+    )
+    parser.add_argument(
+        "--height", type=int, default=480,
+        help="Camera capture height (increase to 720 for far-away faces)"
+    )
 
     args = parser.parse_args()
 
@@ -312,7 +322,9 @@ def main() -> None:
         detect_interval=args.detect_interval,
         similarity_threshold=args.threshold,
         max_faces=args.max_faces,
-        no_display=args.no_display
+        no_display=args.no_display,
+        width=args.width,
+        height=args.height
     )
     pipeline.start()
 
