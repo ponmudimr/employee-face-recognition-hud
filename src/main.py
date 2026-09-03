@@ -141,7 +141,7 @@ class PipelineManager:
                 frame_count += 1
 
                 self.pipeline_frame_count += 1
-                if self.pipeline_frame_count % self.detect_interval == 0:
+                if self.pipeline_frame_count % self.detect_interval == 0 or not self.tracked_faces:
                     self.det_count += 1
                     t0 = time.perf_counter()
                     self._run_detection_and_recognition(frame)
