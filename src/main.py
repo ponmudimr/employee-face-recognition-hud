@@ -254,16 +254,28 @@ class PipelineManager:
                         best_iou = iou
                         best_old_face = old_face
                 
-                # If the face hasn't moved much (IoU > 0.4), copy the old identity and SKIP SFace!
+                # If the face hasn't moved much (IoU > 0.4), check if it needs re-verification
                 if best_iou > 0.4 and best_old_face is not None:
-                    match_info = best_old_face["match"]
+                    time_since_verify = time.time() - best_old_face.get("last_verify", 0)
+                    if time_since_verify < 2.5:
+                        match_info = best_old_face["match"]
+                        last_verify = best_old_face.get("last_verify", time.time())
+                    else:
+                        t_rec = time.perf_counter()
+                        embedding = self.recognizer.extract_embedding(frame, face_det)
+                        match_info = match_face(embedding, self.database, threshold=self.similarity_threshold)
+                        self.prof_rec.append((time.perf_counter() - t_rec) * 1000)
+                        last_verify = time.time()
                 else:
                     t_rec = time.perf_counter()
                     embedding = self.recognizer.extract_embedding(frame, face_det)
                     match_info = match_face(embedding, self.database, threshold=self.similarity_threshold)
                     self.prof_rec.append((time.perf_counter() - t_rec) * 1000)
+                    last_verify = time.time()
+            else:
+                last_verify = time.time()
 
-            tracked_entry = {"bbox": new_box, "match": match_info}
+            tracked_entry = {"bbox": new_box, "match": match_info, "last_verify": last_verify}
 
             tracker = create_opencv_tracker()
             if tracker is not None:
