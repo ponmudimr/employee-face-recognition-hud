@@ -29,6 +29,22 @@ logger = logging.getLogger("HUD-Main")
 
 def create_opencv_tracker() -> Optional[Any]:
     return cv2.legacy.TrackerMOSSE_create() if hasattr(cv2, "legacy") and hasattr(cv2.legacy, "TrackerMOSSE_create") else cv2.TrackerKCF_create() if hasattr(cv2, "TrackerKCF_create") else None
+
+def calculate_iou(boxA, boxB):
+    # box format: (x, y, w, h)
+    xA = max(boxA[0], boxB[0])
+    yA = max(boxA[1], boxB[1])
+    xB = min(boxA[0] + boxA[2], boxB[0] + boxB[2])
+    yB = min(boxA[1] + boxA[3], boxB[1] + boxB[3])
+    
+    interArea = max(0, xB - xA) * max(0, yB - yA)
+    boxAArea = boxA[2] * boxA[3]
+    boxBArea = boxB[2] * boxB[3]
+    
+    if boxAArea + boxBArea - interArea == 0:
+        return 0.0
+    return interArea / float(boxAArea + boxBArea - interArea)
+
 class PipelineManager:
     """Orchestrates video capture, downscaled detection, embedding recognition, object tracking, and HUD output."""
 
@@ -217,25 +233,42 @@ class PipelineManager:
         new_tracked_faces = []
         new_trackers = []
         img_h, img_w = frame.shape[:2]
+        
+        with self.thread_lock:
+            current_tracked_faces = list(self.tracked_faces)
 
         for face_det in detections:
             x, y, w, h, score = face_det
             x1, y1 = max(0, x), max(0, y)
             x2, y2 = min(img_w, x + w), min(img_h, y + h)
+            new_box = (x1, y1, x2 - x1, y2 - y1)
 
             match_info = None
             if x2 > x1 and y2 > y1:
-                t_rec = time.perf_counter()
-                embedding = self.recognizer.extract_embedding(frame, face_det)
-                match_info = match_face(embedding, self.database, threshold=self.similarity_threshold)
-                self.prof_rec.append((time.perf_counter() - t_rec) * 1000)
+                # OPTIMIZATION: Check IoU against currently tracked faces
+                best_iou = 0.0
+                best_old_face = None
+                for old_face in current_tracked_faces:
+                    iou = calculate_iou(new_box, old_face["bbox"])
+                    if iou > best_iou:
+                        best_iou = iou
+                        best_old_face = old_face
+                
+                # If the face hasn't moved much (IoU > 0.4), copy the old identity and SKIP SFace!
+                if best_iou > 0.4 and best_old_face is not None:
+                    match_info = best_old_face["match"]
+                else:
+                    t_rec = time.perf_counter()
+                    embedding = self.recognizer.extract_embedding(frame, face_det)
+                    match_info = match_face(embedding, self.database, threshold=self.similarity_threshold)
+                    self.prof_rec.append((time.perf_counter() - t_rec) * 1000)
 
-            tracked_entry = {"bbox": (x1, y1, x2 - x1, y2 - y1), "match": match_info}
+            tracked_entry = {"bbox": new_box, "match": match_info}
 
             tracker = create_opencv_tracker()
             if tracker is not None:
                 try:
-                    tracker.init(frame, (x1, y1, x2 - x1, y2 - y1))
+                    tracker.init(frame, new_box)
                     new_trackers.append(tracker)
                 except Exception:
                     new_trackers.append(None)
