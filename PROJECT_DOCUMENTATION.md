@@ -232,3 +232,7 @@ pytest tests/
   - The main display loop exclusively runs the lightweight MOSSE tracker.
   - This fully decouples the camera display framerate from the AI compute time, eliminating the 300ms visual stutters entirely and maintaining a smooth 30 FPS display even with multiple people in frame.
   - Tracker was permanently swapped to `cv2.legacy.TrackerMOSSE_create()` as CSRT was too heavy (~100ms) on the Cortex-A53 without hardware acceleration.
+
+### Threshold Customization
+- **Strict Face Matching:** The default SFace Cosine Similarity match threshold in `src/recognize.py` was increased from the official OpenCV default of `0.363` to a very strict `0.60`.
+- The system will now completely ignore faces and label them "UNKNOWN SUBJECT" unless they achieve at least a 60% raw similarity score to the enrolled database photo.
