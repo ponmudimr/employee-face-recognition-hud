@@ -8,6 +8,7 @@ import logging
 import signal
 import sys
 import time
+import threading
 from typing import List, Dict, Any, Optional
 import cv2
 import numpy as np
@@ -69,6 +70,8 @@ class PipelineManager:
         self.tracked_faces: List[Dict[str, Any]] = []
         self.trackers: List[Any] = []
         self.pipeline_frame_count = 0
+        self.thread_lock = threading.Lock()
+        self.detect_thread = None
 
     def start(self) -> None:
         """Execute the real-time face recognition pipeline loop."""
@@ -140,17 +143,21 @@ class PipelineManager:
 
                 frame_count += 1
 
+                # Step 1: Always run tracking to maintain smooth 30 FPS display
+                self.trk_count += 1
+                t0 = time.perf_counter()
+                self._run_tracking(frame)
+                self.prof_trk.append((time.perf_counter() - t0) * 1000)
+
+                # Step 2: Spawn background thread for heavy Detection/Recognition if needed
                 self.pipeline_frame_count += 1
                 if self.pipeline_frame_count % self.detect_interval == 0 or not self.tracked_faces:
-                    self.det_count += 1
-                    t0 = time.perf_counter()
-                    self._run_detection_and_recognition(frame)
-                    self.prof_det.append((time.perf_counter() - t0) * 1000)
-                else:
-                    self.trk_count += 1
-                    t0 = time.perf_counter()
-                    self._run_tracking(frame)
-                    self.prof_trk.append((time.perf_counter() - t0) * 1000)
+                    if self.detect_thread is None or not self.detect_thread.is_alive():
+                        self.det_count += 1
+                        async_frame = frame.copy()
+                        self.detect_thread = threading.Thread(target=self._run_detection_and_recognition, args=(async_frame,))
+                        self.detect_thread.daemon = True
+                        self.detect_thread.start()
 
                 # Step 2: Calculate real-time FPS
                 elapsed = time.time() - start_time
@@ -177,7 +184,9 @@ class PipelineManager:
 
                 # Step 3: Draw HUD graphics overlay
                 t0 = time.perf_counter()
-                output_frame = draw_overlay(frame, self.tracked_faces, fps=fps)
+                with self.thread_lock:
+                    safe_faces = list(self.tracked_faces)
+                output_frame = draw_overlay(frame, safe_faces, fps=fps)
                 self.prof_draw.append((time.perf_counter() - t0) * 1000)
 
                 # Step 4: Output to display
@@ -198,13 +207,15 @@ class PipelineManager:
             self.cleanup()
 
     def _run_detection_and_recognition(self, frame: np.ndarray) -> None:
-        """Execute face detection and embedding recognition."""
+        """Execute face detection and embedding recognition asynchronously."""
+        t0 = time.perf_counter()
         detections = self.detector.detect(frame)
         if detections:
             detections = sorted(detections, key=lambda d: d.w * d.h, reverse=True)[:self.max_faces]
-        
-        self.tracked_faces.clear()
-        self.trackers.clear()
+        self.prof_det.append((time.perf_counter() - t0) * 1000)
+
+        new_tracked_faces = []
+        new_trackers = []
         img_h, img_w = frame.shape[:2]
 
         for face_det in detections:
@@ -225,32 +236,37 @@ class PipelineManager:
             if tracker is not None:
                 try:
                     tracker.init(frame, (x1, y1, x2 - x1, y2 - y1))
-                    self.trackers.append(tracker)
+                    new_trackers.append(tracker)
                 except Exception:
-                    self.trackers.append(None)
+                    new_trackers.append(None)
             else:
-                self.trackers.append(None)
-            self.tracked_faces.append(tracked_entry)
+                new_trackers.append(None)
+            new_tracked_faces.append(tracked_entry)
+
+        with self.thread_lock:
+            self.tracked_faces = new_tracked_faces
+            self.trackers = new_trackers
 
     def _run_tracking(self, frame: np.ndarray) -> None:
         updated_faces = []
         updated_trackers = []
-        for i, tracker in enumerate(self.trackers):
-            face_data = self.tracked_faces[i]
-            if tracker is not None:
-                try:
-                    success, box = tracker.update(frame)
-                    if success:
-                        x, y, w, h = [int(v) for v in box]
-                        face_data["bbox"] = (x, y, w, h)
-                        updated_faces.append(face_data)
-                        updated_trackers.append(tracker)
-                    else:
-                        logger.debug(f"Tracker update FAILED for face at frame {self.pipeline_frame_count}")
-                except Exception as e:
-                    logger.debug(f"Tracker update error: {e}")
-        self.tracked_faces = updated_faces
-        self.trackers = updated_trackers
+        with self.thread_lock:
+            for i, tracker in enumerate(self.trackers):
+                face_data = self.tracked_faces[i]
+                if tracker is not None:
+                    try:
+                        success, box = tracker.update(frame)
+                        if success:
+                            x, y, w, h = [int(v) for v in box]
+                            face_data["bbox"] = (x, y, w, h)
+                            updated_faces.append(face_data)
+                            updated_trackers.append(tracker)
+                        else:
+                            logger.debug(f"Tracker update FAILED for face at frame {self.pipeline_frame_count}")
+                    except Exception as e:
+                        logger.debug(f"Tracker update error: {e}")
+            self.tracked_faces = updated_faces
+            self.trackers = updated_trackers
     def cleanup(self) -> None:
         """Release hardware capture and display resources cleanly."""
         logger.info("Cleaning up pipeline hardware resources...")
