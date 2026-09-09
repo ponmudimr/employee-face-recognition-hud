@@ -1,20 +1,30 @@
 [Unit]
 Description=Employee Face Recognition HUD Service
-After=multi-user.target graphical.target sound.target
+After=multi-user.target graphical.target lightdm.service sound.target
 Wants=graphical.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-User=mrponmudi
-WorkingDirectory=/home/mrponmudi/GIT/employee-face-recognition-hud
+User=arduino
+WorkingDirectory=/home/arduino/employee-face-recognition-hud
 Environment=PYTHONUNBUFFERED=1
 Environment=DISPLAY=:0
-Environment=XAUTHORITY=/home/mrponmudi/.Xauthority
+Environment=XAUTHORITY=/home/arduino/.Xauthority
 
-# Command to execute main pipeline
-ExecStart=/usr/bin/python3 /home/mrponmudi/GIT/employee-face-recognition-hud/src/main.py --camera 0
+# Give the Xorg/lightdm autologin session and OAK-D-Lite USB enumeration
+# a moment to settle before the pipeline tries to attach to them.
+ExecStartPre=/bin/sleep 5
 
-# Restart policy for resilience during system bring-up or power loss
+# Command to execute main pipeline (-1 = OAK-D-Lite primary camera)
+ExecStart=/usr/bin/python3 /home/arduino/employee-face-recognition-hud/src/main.py --camera -1
+
+# Restart policy for resilience during system bring-up or power loss.
+# on-failure (not always): a clean exit (ESC/'q' on the HUD display) stops
+# the service and stays stopped so the board is free for other use; only a
+# crash or camera-open failure (non-zero exit) triggers a retry.
+# StartLimitIntervalSec=0 above disables the crash-loop giveup for those
+# retries on an unattended AR helmet.
 Restart=on-failure
 RestartSec=5s
 
