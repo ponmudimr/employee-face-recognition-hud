@@ -308,17 +308,32 @@ User asked for better detection with good FPS at room-scale (2-5m) range. Displa
 
 ---
 
+## 7.2 LightDM stuck at login greeter + USB power-rail dropout (2026-09-09, follow-up)
+
+After a board reboot, the user reported being stuck at a login page with no working keyboard/mouse. Two distinct problems, found and fixed in sequence:
+
+**1. LightDM greeter, not `light-locker`.** `/etc/lightdm/lightdm.conf` had `autologin-user` fully commented out — LightDM was showing its actual login greeter (`lightdm-gtk-greeter` process, session class `greeter` on seat0) waiting for manual credentials, which no one can supply on a headset with no reliably-attached input device. This is different from the `light-locker` screensaver-lock fixed in §6.3 (that one only fires after idle timeout; this one blocks at every boot before any session starts). **Fix:** set real autologin in `lightdm.conf` — `autologin-user=arduino`, `autologin-user-timeout=0`, `autologin-session=xfce` (confirmed no Debian `autologin`/`nopasswdlogin` group gate applies on this image). Verified across a real cold boot: `arduino` lands on `seat0` automatically, no greeter process, `loginctl` shows `State=active`.
+
+**2. USB VBUS power rail dropped out — separate issue, not caused by the fix above.** While testing the LightDM fix, restarting the `lightdm` service (to apply the new config without a full reboot) caused an entire downstream USB hub (`Huasheng Electronics USB2.0 HUB`, carrying the OAK-D-Lite camera **and** the keyboard/mouse) to vanish from `lsusb` entirely. Diagnosis: `dmesg` showed a regulator literally named `usb_vbus` (`/sys/class/regulator/regulator.20`) went to `state=disabled` at ~33.7s into boot, with no overcurrent/fault message logged. A subsequent full `sudo reboot` (warm OS restart) did **not** bring it back — the rail stayed disabled through the reboot, strongly suggesting it's controlled by the board's PMIC/load-switch hardware rather than pure kernel/software state, and a warm reboot doesn't reset it. **Fix:** a genuine cold power-off (cut power fully, wait ~10s, power back on) — not just `sudo reboot` — cleared it. Confirmed after: camera back (now enumerating as `03e7:f63b`, its *booted* DepthAI application-mode ID, vs. the unbooted `03e7:2485`), mouse dongle (`3554:fc03`) present, keyboard working, `helmet-recognition.service` running cleanly with live `Detects`/`REC` activity in the logs. Note `regulator.20/state` still reads `disabled` in sysfs even now everything works — that sysfs field apparently doesn't map simply to "is this rail powered," so don't use it as a diagnostic signal on its own; `lsusb` is the reliable check.
+
+**Takeaway for a future session:** if USB peripherals vanish on this board and a plain `sudo reboot` doesn't bring them back, don't spend time on driver-level unbind/rebind attempts — go straight to a full physical power-off/power-on. Restarting `lightdm` specifically is a plausible trigger for this and should be avoided when just applying a config change reachable via a full reboot instead.
+
+---
+
 ## 8. Current Status & Next Steps (as of 2026-09-09)
 
 **Done:**
-- Core pipeline (capture → YuNet detect → SFace recognize → MOSSE track → HUD overlay) working on both the dev laptop (built-in webcam) and the target board (OAK-D-Lite).
+- Core pipeline (capture → YuNet detect → SFace recognize → MOSSE track → HUD overlay) working on both the dev laptop (built-in webcam) and the target board (OAK-D-Lite), including live face detection + recognition confirmed working end-to-end on the actual AR helmet hardware.
 - Repo cleanup: stray scripts/files removed, `pytest` passes cleanly (21 tests), stale doc/test drift fixed.
-- Board (`meryl`) has systemd auto-start installed, enabled, and verified across a full power cycle, including self-healing from a cold-boot camera race.
+- Board (`meryl`) has systemd auto-start installed, enabled, and verified across multiple full power cycles, including self-healing from a cold-boot camera race.
 - ESC/`q` clean-exit behavior fixed to actually stay exited; `startc` command added for manual restart.
+- `light-locker` screensaver-lock disabled and DPMS/screen-blanking forced off every service start (§6.3), and LightDM's login greeter replaced with real autologin (§7.2) — board now boots directly to the HUD with no lock/login screen blocking it.
+- Detection sensitivity recovered (`0.60`→`0.45`) and a multi-face publish-latency bug fixed (§7.1).
 - Global (`~/.claude/`) config set: `includeCoAuthoredBy: false` + a strict CLAUDE.md rule — no AI attribution in any commit/PR from this project (or any project) going forward.
-- 2 commits made locally (`292cd04`, `f166ae3`) — **not yet pushed to `origin/main`** as of this writing; ask the user before pushing.
+- All commits through `ae55ab9` pushed to `origin/main`. The LightDM autologin config (§7.2) was applied directly on the board via `/etc/lightdm/lightdm.conf` — **not yet captured in `systemd/setup_startc.sh` or any tracked file**, so re-provisioning the board from scratch would need this step redone manually. Worth folding into the setup script.
 
 **Known gaps / planned next (not yet done):**
+- LightDM autologin fix (§7.2) is live-only on the board, not yet in `setup_startc.sh` — should be added so a fresh board provision reproduces it.
 - `ExecStartPre=/bin/sleep 5` in the systemd unit is sometimes too short for OAK-D-Lite USB enumeration on a cold boot, causing one failed start attempt before the retry succeeds (see §9). Bumping to ~10-15s would likely eliminate this; flagged to the user but not yet applied — confirm before changing.
 - Physical verification that pressing ESC on the actual AR glass hardware exits cleanly hasn't been done (only the equivalent `systemctl stop` code path was verified remotely).
 - Duplicate `"Cleaning up pipeline hardware resources..."` log lines appear on shutdown (both the `atexit` handler and the SIGTERM handler call `cleanup()`) — cosmetic only, not fixed.
@@ -333,3 +348,6 @@ User asked for better detection with good FPS at room-scale (2-5m) range. Displa
 - **Employee database is per-machine and gitignored** (`enrollment/database/*`, per `.gitignore`) — the dev laptop's local database is empty, while the board's has 5 enrolled employee records (independently enrolled there via `enrollment/enroll.py`). Don't assume the two are in sync.
 - **A plaintext board SSH password already exists in §2 of this file** (Hardware & Environment, from an earlier session, alongside a since-stale IP). Do not add further live credentials to this or any tracked file going forward (see project `CLAUDE.md`) — if this repository is ever made public, rotate that board password first.
 - **`--camera -1` (OAK-D-Lite) is the board's default and what the systemd service uses.** The dev laptop has no OAK-D-Lite attached; use `--camera 0` there (its built-in webcam) for local testing instead — don't copy laptop-tested camera args onto the board or vice versa.
+- **Restarting `lightdm` (`sudo systemctl restart lightdm`) can knock the USB hub carrying the camera/keyboard/mouse offline entirely**, requiring a full physical power-off to recover (a warm `sudo reboot` alone is not enough — see §7.2). Prefer a full reboot over a live `lightdm` restart when possible.
+- **If USB peripherals vanish and `sudo reboot` doesn't bring them back, go straight to a full physical power-off/power-on** rather than attempting driver-level USB unbind/rebind fixes — see §7.2 for the diagnosis (a PMIC-controlled `usb_vbus` regulator that doesn't reset on a warm reboot).
+- **Two different things can block the HUD from being visible at boot** — don't assume it's the one already fixed: `light-locker` (screensaver-triggered lock after idle, fixed in §6.3) and the LightDM login greeter (shown at every boot until real autologin was configured, fixed in §7.2) are separate mechanisms with separate fixes.

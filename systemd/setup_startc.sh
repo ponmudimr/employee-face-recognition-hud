@@ -33,4 +33,23 @@ EOF3
 chown -R arduino:arduino /home/arduino/.config/autostart
 pkill light-locker 2>/dev/null || true
 
+# Real LightDM autologin so the greeter never shows at boot (separate from
+# light-locker above — the greeter blocks every boot until login, not just
+# after idle timeout). Idempotent: only touches the commented template
+# lines, safe to re-run.
+python3 - <<'EOF4'
+path = "/etc/lightdm/lightdm.conf"
+content = open(path).read()
+content = content.replace("#autologin-user=\n", "autologin-user=arduino\n")
+content = content.replace("#autologin-user-timeout=0\n", "autologin-user-timeout=0\n")
+content = content.replace("#autologin-session=\n", "autologin-session=xfce\n")
+open(path, "w").write(content)
+EOF4
+
+# NOTE: applying the autologin config above requires a FULL REBOOT to take
+# effect. Do NOT `systemctl restart lightdm` to apply it live — that has
+# been observed to knock the USB hub carrying the camera/keyboard/mouse
+# offline entirely, requiring a full physical power-off (not just a warm
+# reboot) to recover. See PROJECT_DOCUMENTATION.md §7.2.
+
 echo SETUP_DONE
