@@ -107,7 +107,7 @@ def match_face(
             best_match = record
             
     if best_match is not None:
-        logger.info(f"Live match: {best_match.get('name', 'Unknown')} score={best_similarity:.3f} (threshold={threshold:.2f})")
+        logger.debug(f"Live match: {best_match.get('name', 'Unknown')} score={best_similarity:.3f} (threshold={threshold:.2f})")
 
     if best_match is not None and best_similarity >= threshold:
         match_info = dict(best_match)

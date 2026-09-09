@@ -89,14 +89,16 @@ python3 enrollment/enroll.py --id EMP-101 --name "Jane Doe" --role "Site Supervi
 Launch the real-time HUD pipeline:
 
 ```bash
-python3 src/main.py --camera 0 --detect-interval 10 --threshold 0.5
+python3 src/main.py --camera 2 --detect-interval 3 --threshold 0.60
 ```
 
 **Options:**
-- `--camera`: V4L2 device index (default: `0` for `/dev/video0`).
+- `--camera`: V4L2 device index, or `-1` for the OAK-D-Lite primary default (default: `-1`).
 - `--db`: Path to employee JSON database (default: `enrollment/database/employees.json`).
-- `--detect-interval`: Frequency of running full face detection in frames (default: `10`).
-- `--threshold`: Cosine similarity cutoff for recognition (default: `0.5`).
+- `--detect-interval`: Frequency of running full face detection in frames (default: `3`).
+- `--threshold`: Cosine similarity cutoff for recognition (default: `0.60`).
+- `--max-faces`: Maximum number of largest faces to track simultaneously (default: `3`).
+- `--width` / `--height`: Camera capture resolution (default: `640`x`480`).
 - `--no-display`: Headless execution without rendering GUI window.
 
 ---

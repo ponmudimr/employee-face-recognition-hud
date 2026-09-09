@@ -102,7 +102,7 @@ class TestFaceRecognizer:
 
     def test_default_threshold(self) -> None:
         recognizer = FaceRecognizer(model_path="non_existent.onnx")
-        assert recognizer.match_threshold == 0.363
+        assert recognizer.match_threshold == DEFAULT_MATCH_THRESHOLD
 
     def test_extract_embedding_stub_fallback(self) -> None:
         recognizer = FaceRecognizer(model_path="non_existent.onnx")
