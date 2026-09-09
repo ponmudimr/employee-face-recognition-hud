@@ -298,6 +298,16 @@ Separately, the actual SSH/network path to the board in this session was also ge
 
 ---
 
+## 7.1 Detection accuracy/latency tuning (2026-09-09, follow-up)
+
+User asked for better detection with good FPS at room-scale (2-5m) range. Display FPS was already good (~30 FPS via the async architecture); the real issues were missed faces and multi-face detection latency. Two targeted, low-risk changes (deliberately did *not* touch capture/detection resolution — user confirmed room-scale range, and downscaling the detection frame below capture resolution would trade away far-face detection, which is the opposite of what was asked):
+
+- **Detection confidence threshold `0.60` → `0.45`** (`src/main.py`, `PipelineManager.__init__`). Checked git history first: `0.35` was tried and reverted in commit `332347e` for causing false positives; `0.45` is YuNet's own class default and the validated middle ground between "too strict" (0.60, missing real faces) and "too loose" (0.35, false positives).
+- **Fixed a real responsiveness bug in `_run_detection_and_recognition`**: it built the full per-face detection/recognition results for *all* faces in a cycle, then published them to `self.tracked_faces`/`self.trackers` **once, after every face finished**. With SFace extraction costing ~220-260ms per new/re-verify-needed face, 2-3 simultaneous new people held up display of *all* of them for up to ~750ms, even though the first one was ready at ~250ms. Changed to publish incrementally inside the loop (under the same lock), so each face appears on the HUD as soon as its own recognition completes. Added an explicit `if not detections: clear and return` branch to preserve the prior behavior of clearing tracked faces when a cycle detects nobody (previously handled implicitly by the empty-list end-of-loop publish, which no longer exists).
+- Verified on-device: service restarted cleanly, ran for a full profiling cycle with no errors, `Detects: 3-5` per window, `DET` latency unchanged (~190-340ms, expected — confidence threshold doesn't change detector cost). Could not visually confirm on the physical AR display from here (no camera access to the headset itself) — worth a quick look next time you're wearing it.
+
+---
+
 ## 8. Current Status & Next Steps (as of 2026-09-09)
 
 **Done:**

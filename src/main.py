@@ -78,8 +78,10 @@ class PipelineManager:
         self.cap = WebcamCapture(device_index=self.camera_index, width=width, height=height)
         self.display = DisplayWindow(fullscreen=True) if not self.no_display else None
         
-        # Lowered confidence threshold from 0.45 to 0.35 to improve detection in poor lighting
-        self.detector = FaceDetector(confidence_threshold=0.60, target_size=(width, height))
+        # 0.45 is YuNet's own standard default: 0.35 was tried and reverted
+        # (caused false positives, see commit 332347e), 0.60 was too strict
+        # and missed real faces. 0.45 is the validated middle ground.
+        self.detector = FaceDetector(confidence_threshold=0.45, target_size=(width, height))
         self.recognizer = FaceRecognizer(match_threshold=self.similarity_threshold)
 
         self.database: List[Dict[str, Any]] = []
@@ -233,9 +235,15 @@ class PipelineManager:
         new_tracked_faces = []
         new_trackers = []
         img_h, img_w = frame.shape[:2]
-        
+
         with self.thread_lock:
             current_tracked_faces = list(self.tracked_faces)
+
+        if not detections:
+            with self.thread_lock:
+                self.tracked_faces = []
+                self.trackers = []
+            return
 
         for face_det in detections:
             x, y, w, h, score = face_det
@@ -288,9 +296,16 @@ class PipelineManager:
                 new_trackers.append(None)
             new_tracked_faces.append(tracked_entry)
 
-        with self.thread_lock:
-            self.tracked_faces = new_tracked_faces
-            self.trackers = new_trackers
+            # Publish incrementally: a face appears on the HUD as soon as its
+            # own recognition finishes, instead of waiting for every face
+            # detected this cycle to finish first. Previously this was a
+            # single publish after the whole loop, so e.g. 3 simultaneous
+            # new faces (each ~250ms of SFace extraction) held up display of
+            # ALL of them for ~750ms instead of showing the first one at
+            # ~250ms.
+            with self.thread_lock:
+                self.tracked_faces = list(new_tracked_faces)
+                self.trackers = list(new_trackers)
 
     def _run_tracking(self, frame: np.ndarray) -> None:
         updated_faces = []
