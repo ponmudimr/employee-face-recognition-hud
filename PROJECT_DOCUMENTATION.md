@@ -205,6 +205,8 @@ pytest tests/
 - **Commit `9c4e2ee`**: Switched primary camera default to Luxonis OAK-D-Lite-AF (`--camera -1`) and enabled continuous video autofocus (`AutoFocusMode.CONTINUOUS_VIDEO`).
 - **Commit `06d53e8`**: Fixed `NameError: name 'DEFAULT_MATCH_THRESHOLD' is not defined` by importing `DEFAULT_MATCH_THRESHOLD` from `recognize` module into `src/main.py`.
 - **Commit `c681cf8`**: Registered `atexit` and `signal` (`SIGINT`/`SIGTERM`) hardware release handlers in `src/main.py` to guarantee `device.close()` / `release()` runs on any exit or kill signal, preventing recurring `X_LINK_DEVICE_ALREADY_IN_USE` USB lockups. Verified live on board (31.7 FPS, clean shutdown).
+- **Commit `292cd04`**: Reverted the winning-match log in `src/recognize.py` from `INFO` back to `DEBUG` (was bumped to `INFO` in `91b9354` for threshold debugging). Fixed `README.md` quick-start defaults to match `main.py`'s actual current values. Fixed `tests/test_recognize.py::test_default_threshold` to assert against the `DEFAULT_MATCH_THRESHOLD` constant instead of a hardcoded stale `0.363`.
+- **Commit `f166ae3`**: Retargeted `systemd/helmet-recognition.service` from the dev laptop's user/paths to the actual Arduino UNO Q board (`user=arduino`, `--camera -1` for OAK-D-Lite). Changed `Restart=always` to `Restart=on-failure` so ESC/`q` on the HUD exits cleanly and stays stopped, while a camera-open failure or crash still auto-recovers. Added `systemd/setup_startc.sh`, which provisions a `startc` command to manually relaunch the HUD from a terminal.
 
 ### DepthAI V2 vs V3 Compatibility Fixes
 - Addressed a critical `X_LINK_DEVICE_ALREADY_IN_USE` lockup error that occurred due to a V2 API mismatch with DepthAI `3.9.0`.
@@ -236,3 +238,82 @@ pytest tests/
 ### Threshold Customization
 - **Strict Face Matching:** The default SFace Cosine Similarity match threshold in `src/recognize.py` was increased from the official OpenCV default of `0.363` to a very strict `0.60`.
 - The system will now completely ignore faces and label them "UNKNOWN SUBJECT" unless they achieve at least a 60% raw similarity score to the enrolled database photo.
+
+---
+
+## 6. AR Helmet Deployment (systemd Auto-Start)
+
+The target deployment is a wearable AR helmet/glasses driven by the Arduino UNO Q board (hostname `meryl`, SSH user `arduino`). The board runs the HUD as a systemd service so it comes up automatically on power-on with no manual login required.
+
+### 6.1 How it works
+- **Unit file:** `systemd/helmet-recognition.service`. Installed to `/etc/systemd/system/helmet-recognition.service` on the board, enabled via `WantedBy=graphical.target`.
+- **Camera:** launches with `--camera -1` (OAK-D-Lite, the board's primary camera).
+- **Display:** `DISPLAY=:0` / `XAUTHORITY=/home/arduino/.Xauthority`, targeting the board's `lightdm`-managed autologin X session on seat0.
+- **`ExecStartPre=/bin/sleep 5`** gives the Xorg/lightdm session and OAK-D-Lite USB enumeration a moment to settle before the pipeline attaches. See gotcha in §9 — this is sometimes not quite long enough on a cold boot.
+- **Restart policy — `Restart=on-failure`, `StartLimitIntervalSec=0`:** a clean exit (pressing **ESC** or `q` in the HUD window, which `src/main.py`'s display loop already treats as quit) exits with code 0 and the service **stays stopped**, freeing the board for other use. A camera-open failure or crash (non-zero exit) triggers an unlimited retry every `RestartSec=5s` — important since this is an unattended headset with no way to manually restart it if it silently gave up after N failed attempts.
+
+### 6.2 Manual start: `startc`
+- `systemd/setup_startc.sh` provisions `/usr/local/bin/startc` on the board — run `startc` from any terminal to relaunch the HUD after a clean ESC/`q` exit.
+- Backed by `/etc/sudoers.d/helmet-recognition`, a passwordless-sudo rule scoped **only** to `systemctl start/stop/restart/status helmet-recognition.service` (not general root access), so `startc` doesn't prompt for a password.
+- Re-run `sudo bash systemd/setup_startc.sh` on the board any time the unit file changes, to reinstall it and reload systemd.
+
+### 6.3 Verified on-device (2026-09-09)
+- Full power-cycle test: rebooted the board, systemd started the service automatically at boot with no manual intervention — proves the `enable` + `WantedBy=graphical.target` wiring.
+- Self-healing: on that same cold boot, the first start attempt failed (`Cannot find any device with given deviceInfo` — OAK-D-Lite not yet enumerated), and `Restart=on-failure` retried 5s later successfully. See §9 for the underlying gotcha.
+- Clean-exit behavior: simulated via `systemctl stop` (same code path as the app's own clean exit) — service went `inactive` and did not respawn, as intended. `startc` then relaunched it successfully with no password prompt.
+
+---
+
+## 7. Session Log — 2026-09-09
+
+Continuing the bug/fix log from §3 above.
+
+### 🐛 Bug #12: `pytest` INTERNALERROR from duplicate `test_detect.py`
+- **Symptom:** Running bare `pytest` (not `pytest tests/`) crashed with `INTERNALERROR` instead of collecting/running tests.
+- **Root Cause:** A stray, untracked `test_detect.py` at repo root (leftover from an earlier ad-hoc session) called `exit(1)` at import time when it couldn't open a camera, and additionally collided on module name with `tests/test_detect.py` (no `__init__.py` in either directory).
+- **Resolution:** Deleted the stray root-level `test_detect.py`, along with 13 other untracked one-off `patch_*.py`/`fix_indent*.py` throwaway scripts from earlier sessions (their edits were already applied and committed — they were just clutter) and a stray `.README.md.swp` vim swapfile.
+
+### 🐛 Bug #13: Stale test asserting hardcoded old threshold
+- **Symptom:** After fixing Bug #12 and running the full suite, `tests/test_recognize.py::test_default_threshold` failed: `assert 0.6 == 0.363`.
+- **Root Cause:** `DEFAULT_MATCH_THRESHOLD` was deliberately changed from `0.363` to `0.60` (commit `85926bd`), but this test still hardcoded the old value.
+- **Resolution:** Changed the assertion to compare against the `DEFAULT_MATCH_THRESHOLD` constant instead of a literal, so it can't drift again.
+
+### 🐛 Bug #14: systemd `Restart=always` fights a deliberate ESC exit
+- **Symptom:** The AR-helmet systemd unit (originally written for the dev laptop, with wrong `User=`/paths and `--camera 0`) used `Restart=always`, so exiting the HUD via ESC/`q` to use the board for something else would just get relaunched 5 seconds later.
+- **Root Cause:** `Restart=always` restarts on *any* exit, including a clean/intentional one (exit code 0) — no distinction from a crash.
+- **Resolution:** Retargeted the unit to the board (`User=arduino`, `/home/arduino/employee-face-recognition-hud`, `--camera -1`), and changed to `Restart=on-failure` so only a non-zero exit (crash, camera failure) triggers auto-restart; a clean ESC/`q` exit stays stopped. Added the `startc` command (§6.2) to manually relaunch when desired.
+
+### ℹ️ Infra note: Claude Code's Bash tool sandboxes LAN access by default
+Not a bug in this repo, but cost significant time this session and will bite any future AI session working on this board over SSH: **Claude Code's Bash tool sandboxes network access by default**, and that sandbox appears to block direct connections to arbitrary private LAN IPs (like the board's `10.70.x.x` address) even when a human's own terminal on the same machine connects fine. Symptom looked exactly like "the board went offline" (connection timeouts, "no route to host") but was actually the tool's own sandbox. Fix: pass `dangerouslyDisableSandbox: true` on Bash calls that need to reach the board.
+
+Separately, the actual SSH/network path to the board in this session was also genuinely flaky (independent of the sandbox issue) — commands would intermittently hang or timeout with no clear pattern tied to payload size. `scp` in particular reliably hung. Workarounds used successfully:
+- Wrap SSH commands in a bounded retry loop (`for attempt in 1..N; do timeout ...; done`).
+- For file transfers, avoid `scp`; pipe `base64`-encoded content through a single `ssh ... "echo '<b64>' | base64 -d > file"` command instead.
+
+---
+
+## 8. Current Status & Next Steps (as of 2026-09-09)
+
+**Done:**
+- Core pipeline (capture → YuNet detect → SFace recognize → MOSSE track → HUD overlay) working on both the dev laptop (built-in webcam) and the target board (OAK-D-Lite).
+- Repo cleanup: stray scripts/files removed, `pytest` passes cleanly (21 tests), stale doc/test drift fixed.
+- Board (`meryl`) has systemd auto-start installed, enabled, and verified across a full power cycle, including self-healing from a cold-boot camera race.
+- ESC/`q` clean-exit behavior fixed to actually stay exited; `startc` command added for manual restart.
+- Global (`~/.claude/`) config set: `includeCoAuthoredBy: false` + a strict CLAUDE.md rule — no AI attribution in any commit/PR from this project (or any project) going forward.
+- 2 commits made locally (`292cd04`, `f166ae3`) — **not yet pushed to `origin/main`** as of this writing; ask the user before pushing.
+
+**Known gaps / planned next (not yet done):**
+- `ExecStartPre=/bin/sleep 5` in the systemd unit is sometimes too short for OAK-D-Lite USB enumeration on a cold boot, causing one failed start attempt before the retry succeeds (see §9). Bumping to ~10-15s would likely eliminate this; flagged to the user but not yet applied — confirm before changing.
+- Physical verification that pressing ESC on the actual AR glass hardware exits cleanly hasn't been done (only the equivalent `systemctl stop` code path was verified remotely).
+- Duplicate `"Cleaning up pipeline hardware resources..."` log lines appear on shutdown (both the `atexit` handler and the SIGTERM handler call `cleanup()`) — cosmetic only, not fixed.
+
+---
+
+## 9. Known Issues / Gotchas
+
+- **Board IP changes on every reboot** (DHCP, no static lease configured) and `meryl.local` mDNS resolution did not work reliably in this session — after any board power-cycle, rediscover its current IP (have the user SSH in manually and report the address, or check the router's DHCP client list) rather than assuming the last-known IP still works.
+- **Claude Code's Bash tool sandbox blocks direct connections to the board's LAN IP by default** — pass `dangerouslyDisableSandbox: true` for any Bash call that needs to reach it. Without this it looks exactly like the board is offline. See §7.
+- **The SSH/network path to the board is flaky** — wrap remote commands in retry loops; avoid `scp` (prefer base64-over-ssh for file transfers). See §7.
+- **Employee database is per-machine and gitignored** (`enrollment/database/*`, per `.gitignore`) — the dev laptop's local database is empty, while the board's has 5 enrolled employee records (independently enrolled there via `enrollment/enroll.py`). Don't assume the two are in sync.
+- **A plaintext board SSH password already exists in §2 of this file** (Hardware & Environment, from an earlier session, alongside a since-stale IP). Do not add further live credentials to this or any tracked file going forward (see project `CLAUDE.md`) — if this repository is ever made public, rotate that board password first.
+- **`--camera -1` (OAK-D-Lite) is the board's default and what the systemd service uses.** The dev laptop has no OAK-D-Lite attached; use `--camera 0` there (its built-in webcam) for local testing instead — don't copy laptop-tested camera args onto the board or vice versa.
