@@ -257,7 +257,13 @@ The target deployment is a wearable AR helmet/glasses driven by the Arduino UNO 
 - Backed by `/etc/sudoers.d/helmet-recognition`, a passwordless-sudo rule scoped **only** to `systemctl start/stop/restart/status helmet-recognition.service` (not general root access), so `startc` doesn't prompt for a password.
 - Re-run `sudo bash systemd/setup_startc.sh` on the board any time the unit file changes, to reinstall it and reload systemd.
 
-### 6.3 Verified on-device (2026-09-09)
+### 6.3 Screen lock / blanking disabled
+The board's default Debian/lightdm desktop runs `light-locker`, which locks the screen once DPMS/screensaver blanking triggers (10 min idle by default) — this would obscure the AR HUD behind a lock screen, unacceptable for an always-on unattended display. Fixed in `systemd/setup_startc.sh`:
+- Per-user XDG autostart override at `~/.config/autostart/light-locker.desktop` (`Hidden=true`) permanently disables `light-locker` for the `arduino` user, beating the system-wide `/etc/xdg/autostart/light-locker.desktop` entry.
+- The systemd unit's second `ExecStartPre` runs `xset s off -dpms s noblank` on every service start, since DPMS/screensaver state is per-X-session runtime state that doesn't persist across X restarts — this is a belt-and-suspenders re-assertion independent of desktop config.
+- Verified live: `light-locker` process killed and confirmed not respawning; `xset q` showed `DPMS is Disabled` and screensaver `timeout: 0` after a full service restart, with both `ExecStartPre` steps showing `status=0/SUCCESS` in `systemctl status`.
+
+### 6.4 Verified on-device (2026-09-09)
 - Full power-cycle test: rebooted the board, systemd started the service automatically at boot with no manual intervention — proves the `enable` + `WantedBy=graphical.target` wiring.
 - Self-healing: on that same cold boot, the first start attempt failed (`Cannot find any device with given deviceInfo` — OAK-D-Lite not yet enumerated), and `Restart=on-failure` retried 5s later successfully. See §9 for the underlying gotcha.
 - Clean-exit behavior: simulated via `systemctl stop` (same code path as the app's own clean exit) — service went `inactive` and did not respawn, as intended. `startc` then relaunched it successfully with no password prompt.

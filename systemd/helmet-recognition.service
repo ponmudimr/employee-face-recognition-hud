@@ -16,6 +16,14 @@ Environment=XAUTHORITY=/home/arduino/.Xauthority
 # a moment to settle before the pipeline tries to attach to them.
 ExecStartPre=/bin/sleep 5
 
+# Disable screen blanking/DPMS/screensaver every start: these are runtime X
+# settings that reset on every new X session, and light-locker (Debian's
+# default lightdm screen locker) locks the screen once DPMS/blanking
+# triggers. The AR HUD must never be obscured by a lock screen or blanked
+# display. Failure here (e.g. X not ready yet) must not block the HUD
+# starting, hence the "; true".
+ExecStartPre=/bin/sh -c '/usr/bin/xset s off -dpms s noblank; true'
+
 # Command to execute main pipeline (-1 = OAK-D-Lite primary camera)
 ExecStart=/usr/bin/python3 /home/arduino/employee-face-recognition-hud/src/main.py --camera -1
 

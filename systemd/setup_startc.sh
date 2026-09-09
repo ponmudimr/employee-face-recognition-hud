@@ -19,4 +19,18 @@ sudo systemctl start helmet-recognition.service
 EOF2
 chmod +x /usr/local/bin/startc
 
+# Disable light-locker (Debian's default lightdm screen locker) so it never
+# obscures the AR HUD with a lock screen. XDG per-user override
+# (Hidden=true) beats the system-wide /etc/xdg/autostart entry.
+mkdir -p /home/arduino/.config/autostart
+cat > /home/arduino/.config/autostart/light-locker.desktop <<'EOF3'
+[Desktop Entry]
+Type=Application
+Name=Screen Locker
+Exec=light-locker
+Hidden=true
+EOF3
+chown -R arduino:arduino /home/arduino/.config/autostart
+pkill light-locker 2>/dev/null || true
+
 echo SETUP_DONE
