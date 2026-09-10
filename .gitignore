@@ -11,6 +11,13 @@ models/*.prototxt
 enrollment/database/*
 !enrollment/database/.gitkeep
 
+# Machinery Database (contains machine backend URLs -- keep local per deployment)
+machinery/database/*
+!machinery/database/.gitkeep
+
+# Generated printable ArUco marker images (regenerate via machinery/register_machine.py)
+machinery/markers/
+
 # Test fixtures
 tests/fixtures/*
 !tests/fixtures/.gitkeep

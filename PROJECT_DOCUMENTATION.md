@@ -333,6 +333,7 @@ After a board reboot, the user reported being stuck at a login page with no work
 - All commits through `ae55ab9` pushed to `origin/main`. The LightDM autologin config (§7.2) was applied directly on the board via `/etc/lightdm/lightdm.conf` — **not yet captured in `systemd/setup_startc.sh` or any tracked file**, so re-provisioning the board from scratch would need this step redone manually. Worth folding into the setup script.
 
 **Known gaps / planned next (not yet done):**
+- Machine/PLC recognition feature (§10) built and unit-tested locally, but **not yet deployed to the board, not yet committed, and no real machine registered** — needs the user's BottleWise backend LAN address and a printed marker before it's actually usable.
 - LightDM autologin fix (§7.2) is live-only on the board, not yet in `setup_startc.sh` — should be added so a fresh board provision reproduces it.
 - `ExecStartPre=/bin/sleep 5` in the systemd unit is sometimes too short for OAK-D-Lite USB enumeration on a cold boot, causing one failed start attempt before the retry succeeds (see §9). Bumping to ~10-15s would likely eliminate this; flagged to the user but not yet applied — confirm before changing.
 - Physical verification that pressing ESC on the actual AR glass hardware exits cleanly hasn't been done (only the equivalent `systemctl stop` code path was verified remotely).
@@ -351,3 +352,43 @@ After a board reboot, the user reported being stuck at a login page with no work
 - **Restarting `lightdm` (`sudo systemctl restart lightdm`) can knock the USB hub carrying the camera/keyboard/mouse offline entirely**, requiring a full physical power-off to recover (a warm `sudo reboot` alone is not enough — see §7.2). Prefer a full reboot over a live `lightdm` restart when possible.
 - **If USB peripherals vanish and `sudo reboot` doesn't bring them back, go straight to a full physical power-off/power-on** rather than attempting driver-level USB unbind/rebind fixes — see §7.2 for the diagnosis (a PMIC-controlled `usb_vbus` regulator that doesn't reset on a warm reboot).
 - **Two different things can block the HUD from being visible at boot** — don't assume it's the one already fixed: `light-locker` (screensaver-triggered lock after idle, fixed in §6.3) and the LightDM login greeter (shown at every boot until real autologin was configured, fixed in §7.2) are separate mechanisms with separate fixes.
+
+---
+
+## 10. Machine/PLC Recognition Feature (2026-09-10)
+
+### 10.1 What it is
+Extends the HUD beyond face recognition to also identify tagged industrial machines/PLCs and overlay their live telemetry — e.g. walk up to a bottle-filling line and see its current phase, production count, and who's operating it. Requested by the user, developed against reference files their team provided for **BottleWise DT v2.4**: a Node.js + HiveMQ (MQTT) + MySQL + React digital twin for a bottle-filling line, exposing a `GET /api/state` REST endpoint with rich live telemetry (conveyor speeds, filler level, capper torque, phase, production counts, alarms, etc.).
+
+### 10.2 Key decisions (with rationale)
+- **ArUco markers, not a trained object detector or QR codes.** `cv2.aruco` is already in the installed OpenCV build (verified: 5.0.0) — zero new heavy dependency, consistent with the project's "no dlib/PyTorch/TensorFlow" motto. Detection costs a few ms on CPU vs. the ~200ms+ YuNet already pays per cycle — adding a second CNN-based detector would have been a real performance risk on this hardware. ArUco was chosen over QR specifically because it's designed to stay decodable at odd angles/motion blur, which matters more for a moving AR headset than QR's extra data capacity.
+- **Curated card, not the full BottleWise dashboard.** User explicitly wants "some picked information," not a data dump. Fields shown: current phase + progress, production count + batch ID, and operator name — confirmed with the user via direct selection, not assumed.
+- **Operator name comes from this project's own face recognition, not BottleWise.** Checked BottleWise's schema/backend first — it has no real operator-tracking field anywhere (only a hardcoded `'OPERATOR'` fallback string used when acknowledging alarms). Rather than asking another team to add data, when a recognized employee is in the same frame as a machine marker, their name is attributed as the operator — unifies the two existing pipelines instead of adding a dependency on someone else's system.
+- **Telemetry via REST polling on a background thread, not the WebSocket feed.** Simpler to implement and reason about than a persistent WS client; matches the async-thread pattern `main.py` already uses for face detection so a slow/unreachable backend never blocks the render loop. Can upgrade to WebSocket later if ~1s staleness matters.
+- **Machine detection runs regardless of whether any faces were found that cycle.** This required restructuring `_run_detection_and_recognition`'s original "if no faces, clear and return early" into a non-early-returning shape (extracted to `_detect_and_recognize_faces` + `_detect_and_track_machines`) — a machine with nobody standing near it must still show its telemetry; the original early-`return` would have silently skipped machine detection whenever zero faces were in frame.
+
+### 10.3 New files
+- `src/machine_detect.py` — `MachineDetector` (ArUco wrapper), `load_machine_database`/`match_machine` (mirrors `recognize.py`'s `load_database`/`match_face`).
+- `src/machine_telemetry.py` — `MachineTelemetryClient`, one per machine, background-polls `GET {api_base_url}/api/state` every 1s, exposes `get_latest_state()`/`is_connected()` from an in-memory cache (no network call on the render path).
+- `machinery/register_machine.py` — CLI to assign a marker ID to a machine (`--marker-id`, `--name`, `--api-url`), writes `machinery/database/machines.json`, and generates a printable marker PNG via `cv2.aruco.generateImageMarker` into `machinery/markers/`.
+- `machinery/database/` (gitignored, `.gitkeep` tracked) and `machinery/markers/` (fully gitignored — regeneratable) — mirror `enrollment/database/`'s pattern.
+- `tests/test_machine_detect.py`, `tests/test_machine_telemetry.py` — 17 new tests (renders a real ArUco marker into a synthetic frame and detects it back; spins up a local `http.server` to test the telemetry client against a real HTTP response, not just mocks).
+
+### 10.4 Modified files
+- `src/overlay.py` — added `draw_machine_card` (distinct orange accent color from person cards' green/amber) and extended `draw_overlay`'s signature with a `tracked_machines` parameter.
+- `src/main.py` — `PipelineManager` gained `machine_detector`, `machine_database`, `tracked_machines`/`machine_trackers` (tracked with the same MOSSE-tracker + incremental-publish pattern as faces), and `telemetry_clients` (dict keyed by marker ID, lazily started). `--machines-db` CLI arg added (default `machinery/database/machines.json`). `cleanup()` now stops all telemetry client threads.
+- `requirements.txt` — added `requests>=2.31.0` (HTTP client for telemetry polling).
+- `README.md` — new "Machine Recognition" section with setup steps; project structure diagram updated.
+
+### 10.5 Verified (local dev machine only — not yet tested on the board or against the real BottleWise backend)
+- Rendered a real ArUco marker into a synthetic frame and detected it back correctly (marker ID + bbox).
+- `machinery/register_machine.py`'s save/update-in-place logic and marker PNG generation, via direct function calls.
+- `MachineTelemetryClient` against both an unreachable URL (stays disconnected, no crash) and a real local `http.server` mock (`GET /api/state` → correctly cached and exposed).
+- Full pipeline integration: called `PipelineManager._detect_and_track_machines()` directly with a synthetic marker frame — confirmed telemetry client auto-starts on first marker sighting, operator name is correctly attributed when a matching face is also present vs. `None` when not, and `tracked_machines` correctly clears when the marker leaves frame.
+- Full existing test suite still green: 38 tests total (21 original + 17 new), all passing.
+
+### 10.6 Not yet done
+- **Not deployed to or tested on the actual board.** No physical ArUco marker has been printed, and the pipeline hasn't been run against the real BottleWise backend (user has it running on their PC — need its LAN IP:port to register a real machine entry, since it's a config value supplied at registration time via `--api-url`, not hardcoded anywhere).
+- **No machine registered yet** — `machinery/database/machines.json` doesn't exist until `machinery/register_machine.py` is run once for the actual bottle-filling line.
+- Only the single-machine case has been exercised; the code supports multiple registered machines (list-based `machines.json`, one telemetry client per marker ID) but this hasn't been tested with more than one.
+- Not yet committed to git.

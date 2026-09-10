@@ -22,6 +22,7 @@ The system reads frames from a USB webcam, downscales them for fast neural netwo
 - **Hybrid Detection & Tracking:** Runs face detection models every $N$ frames and utilizes OpenCV object tracking (KCF/CSRT) in intermediate frames to reduce CPU overhead.
 - **HUD Graphic Overlay:** Renders corner reticles, semi-transparent employee metadata cards (Name, Role, ID, Match percentage), and real-time FPS metrics.
 - **CLI Enrollment Tool:** Simple interactive command-line interface to capture facial photo samples and generate employee database records.
+- **Machine/PLC Recognition:** Detects ArUco-marker-tagged industrial machines and overlays their live telemetry (phase, production count, operator) pulled from a machine's own backend (e.g. a BottleWise-style digital twin) — see [Machine Recognition](#machine-recognition) below.
 - **Hardware Resilience:** Robust error handling for board bring-up stages when the webcam or display environment is not yet online.
 - **Systemd Integration:** Includes a systemd service unit for autostarting the HUD pipeline on boot.
 
@@ -32,21 +33,27 @@ The system reads frames from a USB webcam, downscales them for fast neural netwo
 ```
 employee-face-recognition-hud/
 ├── src/
-│   ├── capture.py       # USB webcam VideoCapture wrapper & borderless AR HUD display manager
-│   ├── detect.py         # Downscaled face detection wrapper (YuNet / Res10 SSD)
-│   ├── recognize.py      # Face embedding extraction & cosine similarity matching
-│   ├── overlay.py         # HUD reticles, employee info cards, & FPS counter renderer
-│   └── main.py            # Main pipeline orchestrator (capture -> detect -> recognize -> track -> overlay -> display)
+│   ├── capture.py            # USB webcam VideoCapture wrapper & borderless AR HUD display manager
+│   ├── detect.py             # Downscaled face detection wrapper (YuNet / Res10 SSD)
+│   ├── recognize.py          # Face embedding extraction & cosine similarity matching
+│   ├── machine_detect.py     # ArUco marker detection & machine database matching
+│   ├── machine_telemetry.py  # Background poller for a machine's live telemetry backend
+│   ├── overlay.py            # HUD reticles, employee/machine info cards, & FPS counter renderer
+│   └── main.py                # Main pipeline orchestrator (capture -> detect -> recognize -> track -> overlay -> display)
 ├── enrollment/
 │   ├── enroll.py          # Interactive CLI script for registering new employees
 │   └── database/          # Directory storing the local employee JSON database (gitignored)
+├── machinery/
+│   ├── register_machine.py  # CLI script to assign an ArUco marker to a machine + generate its printable marker
+│   ├── markers/              # Generated printable marker PNGs (gitignored)
+│   └── database/             # Directory storing the local machine JSON database (gitignored)
 ├── models/                 # Model weights directory & ONNX model download guide
 │   └── README.md          # Download instructions for YuNet & SFace ONNX models
 ├── systemd/
 │   └── helmet-recognition.service   # Systemd autostart unit file for Debian Linux
 ├── tests/
 │   └── test_recognize.py  # Pytest test suite for vector similarity and matching logic
-├── requirements.txt        # Python package dependencies (opencv-python, onnxruntime, numpy, pytest)
+├── requirements.txt        # Python package dependencies (opencv-python, onnxruntime, numpy, requests, pytest)
 └── .gitignore               # Ignores model weights, database files, and python caches
 ```
 
@@ -100,6 +107,31 @@ python3 src/main.py --camera 2 --detect-interval 3 --threshold 0.60
 - `--max-faces`: Maximum number of largest faces to track simultaneously (default: `3`).
 - `--width` / `--height`: Camera capture resolution (default: `640`x`480`).
 - `--no-display`: Headless execution without rendering GUI window.
+
+---
+
+## Machine Recognition
+
+The HUD can also identify tagged industrial machines/PLCs and overlay their live telemetry, alongside the existing face recognition. A machine is identified by a printed **ArUco marker** sticker (not a trained visual detector — see [`PROJECT_DOCUMENTATION.md`](PROJECT_DOCUMENTATION.md) for why), which is cheap to detect on this hardware and reliable at odd angles/distance.
+
+### 1. Register a machine
+
+```bash
+python3 machinery/register_machine.py \
+  --marker-id 0 \
+  --name "Bottle Filling Line" \
+  --api-url http://192.168.1.50:3001
+```
+
+`--api-url` is the base URL of the machine's own telemetry backend (must expose a `GET /api/state` REST endpoint — this matches a BottleWise Digital Twin backend out of the box). This saves the machine to `machinery/database/machines.json` and generates a printable marker image at `machinery/markers/marker_0.png` — print it and attach it to the machine's panel.
+
+### 2. Run the HUD as usual
+
+```bash
+python3 src/main.py --camera -1 --machines-db machinery/database/machines.json
+```
+
+When the marker comes into view, the HUD polls that machine's `/api/state` on a background thread (never blocking the display loop) and shows a card with its current phase/progress, production count, and — if a recognized employee is also in frame — their name as the operator.
 
 ---
 

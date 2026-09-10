@@ -16,6 +16,8 @@ import numpy as np
 from capture import WebcamCapture, DisplayWindow
 from detect import FaceDetector
 from recognize import FaceRecognizer, load_database, match_face, DEFAULT_MATCH_THRESHOLD
+from machine_detect import MachineDetector, load_machine_database, match_machine
+from machine_telemetry import MachineTelemetryClient
 from overlay import draw_overlay
 
 # Configure structured logging
@@ -52,6 +54,7 @@ class PipelineManager:
         self,
         camera_index: int = 0,
         db_path: str = "enrollment/database/employees.json",
+        machines_db_path: str = "machinery/database/machines.json",
         detect_interval: int = 3,
         similarity_threshold: float = DEFAULT_MATCH_THRESHOLD,
         max_faces: int = 3,
@@ -64,12 +67,14 @@ class PipelineManager:
         Args:
             camera_index: V4L2 device index for webcam.
             db_path: Path to employee JSON database.
+            machines_db_path: Path to machine/PLC JSON database (ArUco marker registry).
             detect_interval: Run detection & embedding extraction every N frames.
             similarity_threshold: Cosine similarity cutoff score.
             no_display: Force headless execution without GUI display window.
         """
         self.camera_index = camera_index
         self.db_path = db_path
+        self.machines_db_path = machines_db_path
         self.detect_interval = max(1, detect_interval)
         self.similarity_threshold = similarity_threshold
         self.max_faces = max_faces
@@ -77,16 +82,26 @@ class PipelineManager:
 
         self.cap = WebcamCapture(device_index=self.camera_index, width=width, height=height)
         self.display = DisplayWindow(fullscreen=True) if not self.no_display else None
-        
+
         # 0.45 is YuNet's own standard default: 0.35 was tried and reverted
         # (caused false positives, see commit 332347e), 0.60 was too strict
         # and missed real faces. 0.45 is the validated middle ground.
         self.detector = FaceDetector(confidence_threshold=0.45, target_size=(width, height))
         self.recognizer = FaceRecognizer(match_threshold=self.similarity_threshold)
+        self.machine_detector = MachineDetector()
 
         self.database: List[Dict[str, Any]] = []
         self.tracked_faces: List[Dict[str, Any]] = []
         self.trackers: List[Any] = []
+
+        self.machine_database: List[Dict[str, Any]] = []
+        self.tracked_machines: List[Dict[str, Any]] = []
+        self.machine_trackers: List[Any] = []
+        # One background telemetry poller per registered machine seen so far,
+        # keyed by ArUco marker ID -- started lazily the first time its
+        # marker is detected, then left running for the pipeline's lifetime.
+        self.telemetry_clients: Dict[int, MachineTelemetryClient] = {}
+
         self.pipeline_frame_count = 0
         self.thread_lock = threading.Lock()
         self.detect_thread = None
@@ -95,9 +110,11 @@ class PipelineManager:
         """Execute the real-time face recognition pipeline loop."""
         logger.info("Initializing Employee Face Recognition HUD system...")
 
-        # Load database
+        # Load databases
         self.database = load_database(self.db_path)
         logger.info(f"Database contains {len(self.database)} enrolled employee record(s).")
+        self.machine_database = load_machine_database(self.machines_db_path)
+        logger.info(f"Machinery database contains {len(self.machine_database)} registered machine(s).")
 
         # Open webcam capture
         if not self.cap.open():
@@ -204,7 +221,19 @@ class PipelineManager:
                 t0 = time.perf_counter()
                 with self.thread_lock:
                     safe_faces = list(self.tracked_faces)
-                output_frame = draw_overlay(frame, safe_faces, fps=fps)
+                    safe_machines = [dict(m) for m in self.tracked_machines]
+                # Pull each machine's live telemetry fresh at render time from the
+                # background poller's cache (no network call on this path -- the
+                # poller thread owns that) so the card never shows baked-in stale data.
+                for m in safe_machines:
+                    client = self.telemetry_clients.get(m.get("marker_id"))
+                    if client is not None:
+                        m["telemetry"] = client.get_latest_state()
+                        m["connected"] = client.is_connected()
+                    else:
+                        m["telemetry"] = None
+                        m["connected"] = False
+                output_frame = draw_overlay(frame, safe_faces, safe_machines, fps=fps)
                 self.prof_draw.append((time.perf_counter() - t0) * 1000)
 
                 # Step 4: Output to display
@@ -232,10 +261,6 @@ class PipelineManager:
             detections = sorted(detections, key=lambda d: d.w * d.h, reverse=True)[:self.max_faces]
         self.prof_det.append((time.perf_counter() - t0) * 1000)
 
-        new_tracked_faces = []
-        new_trackers = []
-        img_h, img_w = frame.shape[:2]
-
         with self.thread_lock:
             current_tracked_faces = list(self.tracked_faces)
 
@@ -243,8 +268,29 @@ class PipelineManager:
             with self.thread_lock:
                 self.tracked_faces = []
                 self.trackers = []
-            return
+            new_tracked_faces: List[Dict[str, Any]] = []
+        else:
+            new_tracked_faces = self._detect_and_recognize_faces(detections, frame, current_tracked_faces)
 
+        # Machine/PLC marker detection runs regardless of whether any faces were
+        # found this cycle -- a machine with nobody standing near it must still
+        # show its telemetry.
+        self._detect_and_track_machines(frame, new_tracked_faces)
+
+    def _detect_and_recognize_faces(
+        self,
+        detections: List[Any],
+        frame: np.ndarray,
+        current_tracked_faces: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Process detected faces: IoU-cache/re-verify/extract, track, and publish incrementally.
+
+        Returns the list of face entries built this cycle (used by the caller to determine
+        which recognized employee, if any, to attribute as a machine's operator).
+        """
+        new_tracked_faces: List[Dict[str, Any]] = []
+        new_trackers: List[Any] = []
+        img_h, img_w = frame.shape[:2]
         for face_det in detections:
             x, y, w, h, score = face_det
             x1, y1 = max(0, x), max(0, y)
@@ -307,6 +353,71 @@ class PipelineManager:
                 self.tracked_faces = list(new_tracked_faces)
                 self.trackers = list(new_trackers)
 
+        return new_tracked_faces
+
+    def _detect_and_track_machines(self, frame: np.ndarray, current_faces: List[Dict[str, Any]]) -> None:
+        """Detect ArUco-tagged machines in the frame, start/reuse a telemetry poller for each,
+        and attribute the current best-known recognized employee (if any) as the operator.
+
+        Args:
+            frame: The same frame face detection just ran on -- reused here, no extra capture.
+            current_faces: Face entries built this cycle (from `_detect_and_recognize_faces`,
+                or the previous cycle's cached faces if no new detections ran), used to pick
+                an operator name for any machine detected here.
+        """
+        markers = self.machine_detector.detect(frame)
+
+        if not markers:
+            with self.thread_lock:
+                self.tracked_machines = []
+                self.machine_trackers = []
+            return
+
+        operator_name: Optional[str] = None
+        for face_entry in current_faces:
+            match = face_entry.get("match")
+            if match:
+                operator_name = match.get("name")
+                break
+
+        new_tracked_machines: List[Dict[str, Any]] = []
+        new_machine_trackers: List[Any] = []
+
+        for marker in markers:
+            machine_record = match_machine(marker.marker_id, self.machine_database)
+            if machine_record is None:
+                continue  # unregistered marker ID -- ignore
+
+            marker_bbox = marker.bbox
+            tracked_entry = {
+                "bbox": marker_bbox,
+                "marker_id": marker.marker_id,
+                "name": machine_record.get("name", "Unknown Machine"),
+                "operator_name": operator_name,
+            }
+
+            if marker.marker_id not in self.telemetry_clients:
+                client = MachineTelemetryClient(machine_record["api_base_url"])
+                client.start()
+                self.telemetry_clients[marker.marker_id] = client
+
+            tracker = create_opencv_tracker()
+            if tracker is not None:
+                try:
+                    tracker.init(frame, marker_bbox)
+                    new_machine_trackers.append(tracker)
+                except Exception:
+                    new_machine_trackers.append(None)
+            else:
+                new_machine_trackers.append(None)
+            new_tracked_machines.append(tracked_entry)
+
+            # Publish incrementally, same reasoning as faces: don't make every
+            # tagged machine wait for the slowest one in this cycle.
+            with self.thread_lock:
+                self.tracked_machines = list(new_tracked_machines)
+                self.machine_trackers = list(new_machine_trackers)
+
     def _run_tracking(self, frame: np.ndarray) -> None:
         updated_faces = []
         updated_trackers = []
@@ -327,12 +438,34 @@ class PipelineManager:
                         logger.debug(f"Tracker update error: {e}")
             self.tracked_faces = updated_faces
             self.trackers = updated_trackers
+
+            updated_machines = []
+            updated_machine_trackers = []
+            for i, tracker in enumerate(self.machine_trackers):
+                machine_data = self.tracked_machines[i]
+                if tracker is not None:
+                    try:
+                        success, box = tracker.update(frame)
+                        if success:
+                            x, y, w, h = [int(v) for v in box]
+                            machine_data["bbox"] = (x, y, w, h)
+                            updated_machines.append(machine_data)
+                            updated_machine_trackers.append(tracker)
+                        else:
+                            logger.debug(f"Tracker update FAILED for machine at frame {self.pipeline_frame_count}")
+                    except Exception as e:
+                        logger.debug(f"Machine tracker update error: {e}")
+            self.tracked_machines = updated_machines
+            self.machine_trackers = updated_machine_trackers
+
     def cleanup(self) -> None:
         """Release hardware capture and display resources cleanly."""
         logger.info("Cleaning up pipeline hardware resources...")
         self.cap.release()
         if self.display is not None:
             self.display.close()
+        for client in self.telemetry_clients.values():
+            client.stop()
         logger.info("Shutdown complete.")
 
 
@@ -348,6 +481,10 @@ def main() -> None:
     parser.add_argument(
         "--db", type=str, default="enrollment/database/employees.json",
         help="Path to employee JSON database file"
+    )
+    parser.add_argument(
+        "--machines-db", type=str, default="machinery/database/machines.json",
+        help="Path to machine/PLC JSON database file (ArUco marker registry)"
     )
     parser.add_argument(
         "--detect-interval", type=int, default=3,
@@ -379,6 +516,7 @@ def main() -> None:
     pipeline = PipelineManager(
         camera_index=args.camera,
         db_path=args.db,
+        machines_db_path=args.machines_db,
         detect_interval=args.detect_interval,
         similarity_threshold=args.threshold,
         max_faces=args.max_faces,
