@@ -112,7 +112,9 @@ python3 src/main.py --camera 2 --detect-interval 3 --threshold 0.60
 
 ## Machine Recognition
 
-The HUD can also identify tagged industrial machines/PLCs and overlay their live telemetry, alongside the existing face recognition. A machine is identified by a printed **ArUco marker** sticker (not a trained visual detector — see [`PROJECT_DOCUMENTATION.md`](PROJECT_DOCUMENTATION.md) for why), which is cheap to detect on this hardware and reliable at odd angles/distance.
+The HUD can also identify tagged industrial machines/PLCs and overlay their status, alongside the existing face recognition. A machine is identified by a printed **ArUco marker** sticker (not a trained visual detector — see [`PROJECT_DOCUMENTATION.md`](PROJECT_DOCUMENTATION.md) for why), which is cheap to detect on this hardware and reliable at odd angles/distance.
+
+Only running/stopped state is real data, read directly over **MQTT** from the machine's own PLC/sensor publishers (no backend server involved) — the HUD subscribes straight to the broker (e.g. the public `broker.hivemq.com`) your machine already publishes to. Running hours and downtime hours are derived locally by timing how long the machine has spent in each state, persisted so the totals survive a restart. Everything else on the card (production %, parts life, next maintenance due, fault reason) is static placeholder data you set at registration time — this project doesn't have a real maintenance-tracking backend, so treat those as dummy values until/unless you wire up something real.
 
 ### 1. Register a machine
 
@@ -120,10 +122,13 @@ The HUD can also identify tagged industrial machines/PLCs and overlay their live
 python3 machinery/register_machine.py \
   --marker-id 0 \
   --name "Bottle Filling Line" \
-  --api-url http://192.168.1.50:3001
+  --machine-id MCH-001 \
+  --status-topic bottlewise/conveyor/input/state \
+  --production-pct 87 \
+  --next-maintenance-due 2026-09-20
 ```
 
-`--api-url` is the base URL of the machine's own telemetry backend (must expose a `GET /api/state` REST endpoint — this matches a BottleWise Digital Twin backend out of the box). This saves the machine to `machinery/database/machines.json` and generates a printable marker image at `machinery/markers/marker_0.png` — print it and attach it to the machine's panel.
+`--status-topic` is the MQTT topic whose payload indicates running/stopped (defaults to `bottlewise/conveyor/input/state` to match BottleWise's own topic scheme); `--mqtt-broker`/`--mqtt-port` default to the public `broker.hivemq.com:1883`. This saves the machine to `machinery/database/machines.json` (with a placeholder parts list you can hand-edit) and generates a printable marker image at `machinery/markers/marker_0.png` — print it and attach it to the machine's panel.
 
 ### 2. Run the HUD as usual
 
@@ -131,7 +136,7 @@ python3 machinery/register_machine.py \
 python3 src/main.py --camera -1 --machines-db machinery/database/machines.json
 ```
 
-When the marker comes into view, the HUD polls that machine's `/api/state` on a background thread (never blocking the display loop) and shows a card with its current phase/progress, production count, and — if a recognized employee is also in frame — their name as the operator.
+When the marker comes into view, the HUD shows a card with live RUNNING/STOPPED status and accumulated running/downtime hours (from MQTT), the placeholder production %/parts/maintenance fields from the registration record, and — if a recognized employee is also in frame — their name as the operator.
 
 ---
 

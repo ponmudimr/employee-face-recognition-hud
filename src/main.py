@@ -409,11 +409,23 @@ class PipelineManager:
                 "bbox": marker_bbox,
                 "marker_id": marker.marker_id,
                 "name": machine_record.get("name", "Unknown Machine"),
+                "machine_id": machine_record.get("machine_id", "N/A"),
                 "operator_name": operator_name,
+                # Static placeholder fields from the registration record -- not live
+                # MQTT data, just shown as-is (see register_machine.py).
+                "production_pct": machine_record.get("production_pct", 0.0),
+                "parts": machine_record.get("parts", []),
+                "next_maintenance_due": machine_record.get("next_maintenance_due", "TBD"),
+                "fault_reason": machine_record.get("fault_reason", "TBD"),
             }
 
             if marker.marker_id not in self.telemetry_clients:
-                client = MachineTelemetryClient(machine_record["api_base_url"])
+                client = MachineTelemetryClient(
+                    machine_key=marker.marker_id,
+                    broker=machine_record.get("mqtt_broker", "broker.hivemq.com"),
+                    port=machine_record.get("mqtt_port", 1883),
+                    status_topic=machine_record.get("status_topic", "bottlewise/conveyor/input/state")
+                )
                 client.start()
                 self.telemetry_clients[marker.marker_id] = client
 

@@ -357,6 +357,8 @@ After a board reboot, the user reported being stuck at a login page with no work
 
 ## 10. Machine/PLC Recognition Feature (2026-09-10)
 
+> **Superseded 2026-09-11 — see §12.** This section describes the original design (REST polling of a BottleWise Node.js backend). The user's team's backend turned out not to be reliably reachable, and it emerged their PLC/sensor nodes publish directly to MQTT anyway — the feature was redesigned to subscribe to MQTT directly, dropping the Node.js backend/REST dependency entirely. §10.1-10.4 below are kept as history (marker choice/detection rationale is unchanged); §12 has the current accurate architecture, fields, and files.
+
 ### 10.1 What it is
 Extends the HUD beyond face recognition to also identify tagged industrial machines/PLCs and overlay their live telemetry — e.g. walk up to a bottle-filling line and see its current phase, production count, and who's operating it. Requested by the user, developed against reference files their team provided for **BottleWise DT v2.4**: a Node.js + HiveMQ (MQTT) + MySQL + React digital twin for a bottle-filling line, exposing a `GET /api/state` REST endpoint with rich live telemetry (conveyor speeds, filler level, capper torque, phase, production counts, alarms, etc.).
 
@@ -411,5 +413,41 @@ Extends the HUD beyond face recognition to also identify tagged industrial machi
 
 ### 11.3 Current status (2026-09-11)
 - Both fixes deployed and verified: service now runs continuously past the point it previously died, actively detecting/recognizing faces, no debounce-candidate log lines observed in the post-fix run (i.e., no spurious quit-key event recurred in this session's testing window).
-- **Not yet committed** — the debounce fix in `src/main.py` exists only on the board and in the local working tree, not yet committed to git as of this writing.
-- Machine recognition feature still blocked on the user starting BottleWise's backend (§10.6).
+- Committed as `8e630a1` and pushed to `origin/main`.
+- Machine recognition feature redesigned later this same session — see §12 (the REST/BottleWise-backend blocker in §10.6 is moot, that approach was dropped).
+
+---
+
+## 12. Machine Recognition Redesign: MQTT instead of REST (2026-09-11)
+
+### 12.1 Why it changed
+While trying to unblock §10.6 (BottleWise's backend unreachable), the user clarified their team's PLC/sensor nodes **publish directly to MQTT** (the public `broker.hivemq.com`, per BottleWise's own `backend/.env`) — the Node.js/Express backend was just a middle layer re-publishing that over REST/WebSocket, and it wasn't reliably running. Decision: subscribe to MQTT directly from the HUD, drop the Node backend dependency entirely. This also resolved the earlier LAN-reachability headaches (port 3001 unreachable, subnet/isolation issues) since it's a straight MQTT subscription to a broker that's already known to work.
+
+Checked the actual topic list in `server.js`/`mqtt-simulator.js` (found after the reference files were relocated to `~/Videos/BottleWise_DT_v2.4_HiveMQ_WS_D (2)/...` mid-session — they'd been moved out of the git-tracked project directory): only machine/process state is published (conveyor speed & state, filler state/level, phase, production count, alarms, energy). **No topic publishes running_hours, downtime_hours, production_pct, or parts_life/parts_to_change** — confirmed directly with the user rather than assumed. Resolution (user's explicit call):
+- **Status (running/stopped)**: real MQTT data, subscribed from `bottlewise/conveyor/input/state`.
+- **Running hours / downtime hours**: derived locally by the HUD, timing how long the machine has been in each MQTT-reported state (not published anywhere, but grounded in real sensor data).
+- **Production %, parts life/parts-to-change, next maintenance due, fault reason**: explicitly **dummy/placeholder data** per the user ("that also dummy date and tme") — static values set once at registration (`machinery/register_machine.py`), not live-tracked. No pretense of a real maintenance backend here.
+
+### 12.2 Architecture
+- **`src/machine_telemetry.py` rewritten** from an HTTP polling client to an MQTT subscriber (`paho-mqtt`, `CallbackAPIVersion.VERSION2` with a fallback to the legacy constructor for older paho-mqtt installs — needed since the board's environment isn't guaranteed to match the dev laptop's pip-installed version). One client per machine (keyed by marker ID, same as before), background thread, `client.subscribe()` on connect.
+- **Hour accumulation**: on each status-topic message, if the decoded status differs from the last known one, credit the elapsed wall-clock time to whichever state just ended (`_running_hours_base` or `_stopped_hours_base`), then persist both totals to a small local JSON file per machine (`machinery/database/hours_<marker_id>.json`) so they survive a restart. `get_latest_state()` computes the *current* status's live-elapsed time on top of the persisted base at call time (not committed until the next actual transition) — this is why `_apply_status_message` and `get_latest_state` are split out as separately testable units, and why `get_latest_state` accepts an optional `now` override (dependency-injected clock, defaults to `time.time()`) purely for deterministic unit testing.
+- **`is_connected()`** means "a status message has arrived within the last 30s" (`STALE_AFTER_S`), not just "the MQTT socket is technically open" — a broker connection can succeed while nothing is actually publishing, and the card should say so.
+- **`machinery/register_machine.py`** extended with `machine_id`, `mqtt_broker`/`mqtt_port`/`status_topic` (all default to the public broker + BottleWise's own topic naming), `production_pct`, `next_maintenance_due`, `fault_reason`, plus a placeholder two-entry `parts` list (one OK, one flagged `needs_change`) written into the record — hand-edit `machines.json` for anything more specific, this isn't meant to be a polished data-entry flow.
+- **`src/overlay.py`'s `draw_machine_card`** rewritten for the new field set: `MACHINE: name (id)`, `STATUS: RUNNING/STOPPED` (green/red), `RUN: Xh  DOWN: Yh`, `PROD: X%  MAINT DUE: date`, `PARTS DUE: ...` (or `PARTS: OK`), `OPERATOR: name` (still real, still from this project's own face recognition, unchanged from §10), and `FAULT: reason` (only shown when STOPPED and a real reason is set, not the `"TBD"` default).
+- **`src/main.py`**: `_detect_and_track_machines` now constructs `MachineTelemetryClient(machine_key=marker_id, broker=..., port=..., status_topic=...)` instead of passing an `api_base_url`, and copies the static placeholder fields (`machine_id`, `production_pct`, `parts`, `next_maintenance_due`, `fault_reason`) from the registration record straight into the tracked-machine entry each cycle (cheap, local, no network involved) — only `telemetry` (status + hours) comes from the live MQTT client at render time, same pattern as before.
+- **`requirements.txt`**: `requests` removed (nothing imports it anymore — verified via grep before removing), `paho-mqtt>=2.0.0` added instead.
+
+### 12.3 Verified (local dev machine only)
+- Real end-to-end MQTT test against the actual public broker (`broker.hivemq.com:1883`, not a mock): connection succeeds (CONNACK logged, subscription issued) — confirmed no publisher is currently active on the topic (expected, the user's simulator/PLC processes aren't running right now), but the connection path itself is proven to work.
+- `_apply_status_message`/`get_latest_state` accumulation logic: first-message handling (no backdated hours), a full RUNNING→STOPPED transition crediting the correct elapsed hours, repeated same-status messages not double-counting, hours persisting correctly across a new client instance reading the same state file, case-insensitive status parsing, `is_connected()` reflecting message recency. 9 new/rewritten tests, all passing.
+- `register_machine.py`'s updated `save_machine_record` with the new fields, via direct function call.
+- `draw_machine_card` rendering all three states (RUNNING with data, STOPPED with a fault reason, disconnected/no telemetry) without error.
+- Full `PipelineManager._detect_and_track_machines()` integration: static fields correctly copied from a synthetic machine record onto the tracked entry, telemetry client correctly constructed with the record's MQTT settings, a simulated status message correctly reflected in `get_latest_state()`.
+- Full test suite: 43 tests total (21 original + 17 marker/registration + 9 telemetry, up from the 38 in §10 since the old 5 REST-based telemetry tests were replaced), all passing.
+
+### 12.4 Not yet done
+- **`paho-mqtt` is not installed on the board's system Python** (`ModuleNotFoundError` confirmed) — needed before this can be deployed there.
+- **Not deployed to the board.** Code exists only on the dev laptop as of this writing.
+- **No real machine registered anywhere** — `machinery/register_machine.py` hasn't been run for the actual bottle-filling line yet, so no physical ArUco marker has been printed either.
+- **Never tested against a live-publishing MQTT feed** — the connection path is proven, but no message has actually been received end-to-end yet (would need the user's team's PLC/simulator actively publishing on `bottlewise/conveyor/input/state` while testing).
+- Not yet committed to git as of this writing.

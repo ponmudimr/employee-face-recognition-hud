@@ -1,88 +1,98 @@
-"""Unit tests for the background machine telemetry polling client in machine_telemetry.py."""
+"""Unit tests for the MQTT-based machine status/hours tracking client in machine_telemetry.py.
+
+Tests the state-accumulation logic directly (via `_apply_status_message`, the same method
+`_on_message` calls after decoding a real MQTT payload) rather than requiring a live broker
+connection -- keeps these fast, deterministic, and independent of network access.
+"""
 
 import json
 import os
 import sys
-import threading
+import tempfile
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from machine_telemetry import MachineTelemetryClient
-
-
-class _StateHandler(BaseHTTPRequestHandler):
-    """Minimal HTTP server standing in for a BottleWise-style backend's /api/state endpoint."""
-
-    state_payload = {"phase": "Filling", "completedCount": 42}
-
-    def do_GET(self) -> None:
-        if self.path == "/api/state":
-            body = json.dumps(self.state_payload).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(body)
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def log_message(self, *args) -> None:
-        pass  # silence request logging in test output
+from machine_telemetry import MachineTelemetryClient, RUNNING_STATE_VALUES
 
 
 @pytest.fixture
-def mock_backend():
-    """Spin up a local HTTP server on an ephemeral port serving /api/state."""
-    server = HTTPServer(("127.0.0.1", 0), _StateHandler)
-    port = server.server_port
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    yield f"http://127.0.0.1:{port}"
-    server.shutdown()
+def tmp_hours_dir():
+    with tempfile.TemporaryDirectory() as d:
+        yield d
 
 
 class TestMachineTelemetryClient:
-    """Test suite for the background telemetry polling client."""
+    """Test suite for status tracking and running/stopped hour accumulation."""
 
-    def test_initial_state_before_first_poll(self) -> None:
-        client = MachineTelemetryClient("http://127.0.0.1:1", poll_interval=1.0)
+    def test_initial_state_before_any_message(self, tmp_hours_dir) -> None:
+        client = MachineTelemetryClient("m1", hours_state_dir=tmp_hours_dir)
         assert client.get_latest_state() is None
         assert client.is_connected() is False
 
-    def test_successful_poll_updates_state(self, mock_backend) -> None:
-        client = MachineTelemetryClient(mock_backend, poll_interval=0.1, timeout=1.0)
-        client.start()
-        try:
-            deadline = time.time() + 2.0
-            while time.time() < deadline and not client.is_connected():
-                time.sleep(0.05)
-            assert client.is_connected() is True
-            state = client.get_latest_state()
-            assert state == {"phase": "Filling", "completedCount": 42}
-        finally:
-            client.stop()
+    def test_first_message_sets_status_without_backdating_hours(self, tmp_hours_dir) -> None:
+        client = MachineTelemetryClient("m1", hours_state_dir=tmp_hours_dir)
+        client._apply_status_message("RUNNING", time.time())
+        state = client.get_latest_state()
+        assert state["status"] == "RUNNING"
+        assert state["running_hours"] == pytest.approx(0.0, abs=1e-6)
+        assert state["stopped_hours"] == pytest.approx(0.0, abs=1e-6)
 
-    def test_unreachable_backend_stays_disconnected(self) -> None:
-        client = MachineTelemetryClient("http://127.0.0.1:1", poll_interval=0.1, timeout=0.2)
-        client.start()
-        try:
-            time.sleep(0.5)
-            assert client.is_connected() is False
-            assert client.get_latest_state() is None
-        finally:
-            client.stop()
+    def test_hours_accumulate_across_a_status_change(self, tmp_hours_dir) -> None:
+        client = MachineTelemetryClient("m1", hours_state_dir=tmp_hours_dir)
+        t0 = time.time()
+        client._apply_status_message("RUNNING", t0)
+        # Simulate 2 hours of running before it stops.
+        t1 = t0 + 2 * 3600
+        client._apply_status_message("STOPPED", t1)
+        state = client.get_latest_state(now=t1)  # no time elapsed since the STOPPED transition
+        assert state["status"] == "STOPPED"
+        assert state["running_hours"] == pytest.approx(2.0, abs=1e-3)
+        assert state["stopped_hours"] == pytest.approx(0.0, abs=1e-3)
 
-    def test_trailing_slash_stripped_from_base_url(self) -> None:
-        client = MachineTelemetryClient("http://example.com/")
-        assert client.api_base_url == "http://example.com"
+    def test_unrecognized_payload_treated_as_stopped(self, tmp_hours_dir) -> None:
+        client = MachineTelemetryClient("m1", hours_state_dir=tmp_hours_dir)
+        client._apply_status_message("garbage_value", time.time())
+        assert client.get_latest_state()["status"] == "STOPPED"
 
-    def test_start_is_idempotent(self, mock_backend) -> None:
-        client = MachineTelemetryClient(mock_backend, poll_interval=0.1, timeout=1.0)
-        client.start()
-        first_thread = client._thread
-        client.start()  # should be a no-op, not spawn a second thread
-        assert client._thread is first_thread
-        client.stop()
+    def test_running_state_values_case_insensitive(self, tmp_hours_dir) -> None:
+        client = MachineTelemetryClient("m1", hours_state_dir=tmp_hours_dir)
+        client._apply_status_message("running", time.time())
+        assert client.get_latest_state()["status"] == "RUNNING"
+
+    def test_repeated_same_status_does_not_double_count(self, tmp_hours_dir) -> None:
+        client = MachineTelemetryClient("m1", hours_state_dir=tmp_hours_dir)
+        t0 = time.time()
+        client._apply_status_message("RUNNING", t0)
+        client._apply_status_message("RUNNING", t0 + 3600)  # still running, no transition
+        client._apply_status_message("STOPPED", t0 + 2 * 3600)
+        state = client.get_latest_state()
+        # Only one RUNNING->STOPPED transition occurred, spanning 2 hours total.
+        assert state["running_hours"] == pytest.approx(2.0, abs=1e-3)
+
+    def test_hours_persist_across_client_instances(self, tmp_hours_dir) -> None:
+        client1 = MachineTelemetryClient("m1", hours_state_dir=tmp_hours_dir)
+        t0 = time.time()
+        client1._apply_status_message("RUNNING", t0)
+        client1._apply_status_message("STOPPED", t0 + 3600)  # 1 hour running, persisted
+
+        client2 = MachineTelemetryClient("m1", hours_state_dir=tmp_hours_dir)
+        client2._apply_status_message("RUNNING", t0 + 3600)
+        state = client2.get_latest_state(now=t0 + 3600)  # no time elapsed since re-starting
+        assert state["running_hours"] == pytest.approx(1.0, abs=1e-3)
+
+    def test_is_connected_reflects_recent_message(self, tmp_hours_dir) -> None:
+        client = MachineTelemetryClient("m1", hours_state_dir=tmp_hours_dir)
+        assert client.is_connected() is False
+        client._apply_status_message("RUNNING", time.time())
+        assert client.is_connected() is True
+
+    def test_different_machine_keys_use_separate_hours_files(self, tmp_hours_dir) -> None:
+        client_a = MachineTelemetryClient("machine_a", hours_state_dir=tmp_hours_dir)
+        client_b = MachineTelemetryClient("machine_b", hours_state_dir=tmp_hours_dir)
+        assert client_a.hours_state_path != client_b.hours_state_path
+
+    def test_running_state_values_constant_is_reasonable(self) -> None:
+        assert "RUNNING" in RUNNING_STATE_VALUES
+        assert "STOPPED" not in RUNNING_STATE_VALUES

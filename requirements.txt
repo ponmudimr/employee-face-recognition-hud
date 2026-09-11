@@ -9,5 +9,5 @@ onnxruntime>=1.15.0
 depthai>=2.20.0,<3.0.0.0
 pytest>=7.0.0
 
-# HTTP client for polling machine telemetry backends (machine HUD feature)
-requests>=2.31.0
+# MQTT client for live machine running/stopped status (machine HUD feature)
+paho-mqtt>=2.0.0

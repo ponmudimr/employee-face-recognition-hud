@@ -105,21 +105,32 @@ def draw_machine_card(
     frame: np.ndarray,
     bbox: Tuple[int, int, int, int],
     machine_name: str,
+    machine_id: str,
     telemetry: Optional[Dict[str, Any]],
+    production_pct: float = 0.0,
+    parts: Optional[List[Dict[str, Any]]] = None,
+    next_maintenance_due: str = "TBD",
+    fault_reason: str = "TBD",
     operator_name: Optional[str] = None,
     connected: bool = True
 ) -> None:
-    """Draw a semi-transparent HUD card with live machine telemetry above/beside its marker.
+    """Draw a semi-transparent HUD card with live machine status + placeholder maintenance
+    data above/beside its marker.
 
     Args:
         frame: BGR image array to draw onto.
         bbox: Marker bounding box tuple `(x, y, w, h)`.
         machine_name: Human-readable machine name from the machinery database.
-        telemetry: Latest `/api/state` snapshot from the machine's backend, or None if it
-            has never been reached.
+        machine_id: Short machine ID from the machinery database (e.g. "MCH-001").
+        telemetry: `{"status", "running_hours", "stopped_hours"}` from the machine's
+            MQTT telemetry client, or None if no status message has ever arrived.
+        production_pct: Placeholder production percentage (not live MQTT data).
+        parts: Placeholder list of `{"name", "life_pct", "needs_change"}` dicts.
+        next_maintenance_due: Placeholder maintenance-due date/text.
+        fault_reason: Placeholder fault reason, shown only when status is STOPPED.
         operator_name: Name of a recognized employee currently in frame with the machine,
             or None if nobody recognized is present.
-        connected: Whether the telemetry backend is currently reachable.
+        connected: Whether a status message has arrived recently (MQTT live).
     """
     x, y, w, h = bbox
     accent_color = COLOR_ORANGE if connected else COLOR_AMBER
@@ -139,31 +150,34 @@ def draw_machine_card(
     img_h, img_w = frame.shape[:2]
     scale_factor = img_w / 640.0
 
-    # Build card text lines from the selected telemetry fields (phase/progress, production,
-    # operator) -- a curated subset, not the full BottleWise dashboard.
-    lines: List[Tuple[str, Tuple[int, int, int]]] = [(f"MACHINE: {machine_name}", COLOR_WHITE)]
+    lines: List[Tuple[str, Tuple[int, int, int]]] = [
+        (f"MACHINE: {machine_name} ({machine_id})", COLOR_WHITE)
+    ]
 
+    status: Optional[str] = None
     if not connected or telemetry is None:
-        lines.append(("NO TELEMETRY (backend unreachable)", COLOR_AMBER))
+        lines.append(("NO LIVE STATUS (MQTT unreachable)", COLOR_AMBER))
     else:
-        phase = telemetry.get("phase", "Unknown")
-        elapsed = telemetry.get("phase_elapsed_s")
-        cycle_time = telemetry.get("cycle_time_s")
-        if elapsed is not None and cycle_time is not None:
-            lines.append((f"PHASE: {phase} ({elapsed:.0f}s/{cycle_time:.0f}s)", COLOR_CYAN))
-        else:
-            lines.append((f"PHASE: {phase}", COLOR_CYAN))
+        status = telemetry.get("status", "UNKNOWN")
+        status_color = COLOR_GREEN if status == "RUNNING" else COLOR_RED
+        lines.append((f"STATUS: {status}", status_color))
+        running_h = telemetry.get("running_hours", 0.0)
+        stopped_h = telemetry.get("stopped_hours", 0.0)
+        lines.append((f"RUN: {running_h:.1f}h  DOWN: {stopped_h:.1f}h", COLOR_CYAN))
 
-        completed = telemetry.get("completedCount")
-        in_progress = telemetry.get("inProduction")
-        batch_id = telemetry.get("batch_id", "N/A")
-        if completed is not None and in_progress is not None:
-            lines.append((f"PROD: {completed} done, {in_progress} in-prog | {batch_id}", COLOR_GREEN))
-        else:
-            lines.append((f"BATCH: {batch_id}", COLOR_GREEN))
+    lines.append((f"PROD: {production_pct:.0f}%  MAINT DUE: {next_maintenance_due}", COLOR_GREEN))
+
+    needs_change = [p.get("name", "?") for p in (parts or []) if p.get("needs_change")]
+    if needs_change:
+        lines.append((f"PARTS DUE: {', '.join(needs_change)}", COLOR_AMBER))
+    else:
+        lines.append(("PARTS: OK", COLOR_GREEN))
 
     if operator_name:
         lines.append((f"OPERATOR: {operator_name}", COLOR_WHITE))
+
+    if status == "STOPPED" and fault_reason and fault_reason != "TBD":
+        lines.append((f"FAULT: {fault_reason}", COLOR_RED))
 
     line_h = int(18 * scale_factor)
     card_w = int(max(260 * scale_factor, w + (40 * scale_factor)))
@@ -255,7 +269,12 @@ def draw_overlay(
             frame,
             bbox,
             machine_name=machine.get("name", "Unknown Machine"),
+            machine_id=machine.get("machine_id", "N/A"),
             telemetry=machine.get("telemetry"),
+            production_pct=machine.get("production_pct", 0.0),
+            parts=machine.get("parts"),
+            next_maintenance_due=machine.get("next_maintenance_due", "TBD"),
+            fault_reason=machine.get("fault_reason", "TBD"),
             operator_name=machine.get("operator_name"),
             connected=machine.get("connected", False)
         )
