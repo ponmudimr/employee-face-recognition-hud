@@ -383,6 +383,15 @@ class PipelineManager:
         """
         markers = self.machine_detector.detect(frame)
 
+        # Temporary diagnostic: log every cycle whether any ArUco marker was seen at
+        # all, and its raw ID, regardless of whether it matches a registered machine.
+        # Helps distinguish "camera can't see the marker" from "marker seen but ID
+        # doesn't match machines.json" from "something further downstream is broken".
+        if markers:
+            logger.info(f"ArUco: {len(markers)} marker(s) seen this cycle, IDs={[m.marker_id for m in markers]}")
+        else:
+            logger.info("ArUco: 0 markers seen this cycle")
+
         if not markers:
             with self.thread_lock:
                 self.tracked_machines = []

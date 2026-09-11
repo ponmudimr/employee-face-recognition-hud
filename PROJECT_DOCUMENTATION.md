@@ -445,9 +445,47 @@ Checked the actual topic list in `server.js`/`mqtt-simulator.js` (found after th
 - Full `PipelineManager._detect_and_track_machines()` integration: static fields correctly copied from a synthetic machine record onto the tracked entry, telemetry client correctly constructed with the record's MQTT settings, a simulated status message correctly reflected in `get_latest_state()`.
 - Full test suite: 43 tests total (21 original + 17 marker/registration + 9 telemetry, up from the 38 in §10 since the old 5 REST-based telemetry tests were replaced), all passing.
 
-### 12.4 Not yet done
-- **`paho-mqtt` is not installed on the board's system Python** (`ModuleNotFoundError` confirmed) — needed before this can be deployed there.
-- **Not deployed to the board.** Code exists only on the dev laptop as of this writing.
-- **No real machine registered anywhere** — `machinery/register_machine.py` hasn't been run for the actual bottle-filling line yet, so no physical ArUco marker has been printed either.
-- **Never tested against a live-publishing MQTT feed** — the connection path is proven, but no message has actually been received end-to-end yet (would need the user's team's PLC/simulator actively publishing on `bottlewise/conveyor/input/state` while testing).
-- Not yet committed to git as of this writing.
+### 12.4 Status as of end of 2026-09-11 session — see §13 for the full deployment log
+Everything below was completed later in the same day; kept here as the original "not yet done" list for historical accuracy, superseded by §13.
+- ~~`paho-mqtt` is not installed on the board's system Python~~ — installed (§13.1).
+- ~~Not deployed to the board~~ — deployed (§13.1).
+- ~~No real machine registered anywhere~~ — "Bottle Filling Line 1" / MCH-001 / marker ID 0 registered, marker printed image generated and sent to the user (§13.2).
+- **Never tested against a live-publishing MQTT feed** — still true. The board's campus network blocks MQTT entirely regardless of topic (§13.3) — this is unrelated to whether a publisher is active.
+
+---
+
+## 13. AR Helmet Deployment & Dashboard Redesign (2026-09-11, continued)
+
+### 13.1 Board deployment
+Installed `paho-mqtt` on the board despite two failed avenues: `pip install` is blocked by PEP 668 (externally-managed-environment) without `--break-system-packages`, and even with that flag AND `apt-get install python3-paho-mqtt`, **the campus network's captive-portal proxy corrupted both downloads** (apt got a 797-byte login-page HTML instead of the real 63KB .deb; pip's index request returned no parseable versions) — the same class of issue as the git-clone SSL bug in §2's Bug #2, now also breaking pip/apt. Resolution: since `paho-mqtt` is pure Python (verified: no `.so` files), copied the already-installed package directly from the dev laptop's venv to the board over SSH (`tar` + pipe through `ssh ... cat > file`, not base64-in-argument -- see below) and extracted it into `/usr/local/lib/python3.13/dist-packages/`. Confirmed working: `import paho.mqtt.client` succeeds on the board.
+
+Also hit and fixed a **large-file transfer limit**: the established base64-embedded-in-SSH-command-argument pattern (used successfully all session for small text files) failed silently for a 221KB base64 payload (probably shell argument length). Fixed by piping the raw file directly through SSH's stdin instead (`cat local_file | ssh host "cat > remote_file"`) — binary-safe, no encoding needed, worked on the first try even at 166KB. **Prefer stdin-piping over argument-embedding for any file over a few KB going forward.**
+
+Pushed `src/machine_telemetry.py`, `src/main.py`, `src/overlay.py`, `requirements.txt`, `machinery/register_machine.py`, and `machinery/database/machines.json` to the board (the `md5sum`-compare-first habit from §11.2 caught exactly which files needed it). Verified via a synthetic-marker test run directly on the board (same technique as the original dev-laptop test in §12.3): machine database loads, marker matches, telemetry client constructs with the correct broker/topic.
+
+### 13.2 Machine registered
+Ran `machinery/register_machine.py` for the real machine: marker ID `0`, name "Bottle Filling Line 1", machine ID `MCH-001`, production 87%, maintenance due 2026-09-20. Generated the printable marker PNG and sent it to the user directly via the file-delivery tool (not committed to git -- `machinery/markers/` and `machinery/database/machines.json` are both gitignored, per-deployment data). `status_topic` was initially guessed as `bottlewise/conveyor/input/state` (BottleWise's own default), then corrected to the user-confirmed real topic `aries/bottlefeeder/data` once they clarified their team's actual publishing setup.
+
+### 13.3 Campus network blocks MQTT entirely -- confirmed exhaustively
+Systematically tested every angle before concluding this is a hard network block, not a code or config issue:
+- Raw TCP to `broker.hivemq.com:1883` (plain MQTT): `Connection refused`.
+- `broker.hivemq.com` on `8000` (plain WS) and `8884` (WSS): both `Connection refused`.
+- `broker.mqttdashboard.com` (the actual hostname HiveMQ's own browser demo client connects to under the hood) on `8884`: `Connection refused`. On `443`: TCP connects, but **certificate verification fails with a hostname mismatch** -- the same captive-portal TLS-interception behavior documented in §2's Bug #2 and hit again in §13.1's pip/apt failures. This network MITMs *all* outbound HTTPS, not just specific domains.
+- Bypassing cert verification entirely (`ssl.CERT_NONE` + `tls_insecure_set`) on both `broker.hivemq.com:443` and `broker.mqttdashboard.com:443`: TCP and TLS both complete, but the **WebSocket upgrade handshake itself fails** ("connection not upgraded"). This is the key finding: it's not just a TLS proxy passively re-encrypting traffic, it's actively inspecting HTTP semantics and rejecting the MQTT-over-WebSocket upgrade specifically, while still letting normal browser HTTPS traffic through (confirmed: the user's own browser, on the same network, successfully used HiveMQ's public websocket-client demo page).
+- Conclusion: this looks like traffic fingerprinting that only allows real browser connections through, not this kind of lightweight client. **Not fixable from code.** Options given to the user: move the board to a different network, ask campus IT to allow it, or leave the code as-is (verified correct) until the network changes. User chose to leave it for now.
+
+### 13.4 Physical marker detection troubleshooting
+Deployed and running, but the physical ArUco marker (shown on a phone screen -- no printer available) would not detect for an extended troubleshooting session. Root-caused via direct camera-frame capture (temporarily stopping the systemd service, since the DepthAI camera only supports one client at a time, running a one-off script to grab a frame, restarting the service) rather than guessing blindly:
+- Multiple captured frames showed no phone in view at all -- initial instructions ("hold it up") were being interpreted as holding the phone near the face/ear, not aiming the screen at the lens.
+- Once correctly positioned in frame, the marker still didn't decode. A frame captured with `cv2.aruco.drawDetectedMarkers` overlaid (to distinguish "not in view" from "in view but undecodable") showed the marker was visible but not detected, with visible **screen glare** and the phone held at an angle rather than flat/perpendicular to the lens.
+- Diagnosis: phone screens are a poor target for this kind of fiducial-marker detection -- glossy/reflective surfaces break the sharp black/white edges the algorithm needs, unlike matte printed paper. Recommendation given to the user: print the marker if at all possible; this is a physical/environmental limitation, not a bug (the same marker renders and decodes correctly in every synthetic/software test in §10-§12).
+- Added a temporary diagnostic log line to `_detect_and_track_machines` (logs marker count + IDs every cycle, even for zero/unmatched markers) specifically to distinguish "camera sees nothing markerlike" from "sees something but ID doesn't match" from "something downstream is broken" -- this should be removed once physical detection is confirmed working, it's not meant to be permanent.
+- To prove the *rendering* code was correct independent of the detection problem, built a one-off demo script (`/tmp/show_dash_demo.py`, not committed -- ephemeral, board-local only) that force-injects a fake `tracked_machines` entry with real sample data and displays it on the actual physical screen. User confirmed seeing the card render correctly, isolating the remaining problem entirely to physical marker detection, not the code.
+
+### 13.5 Dashboard layout redesign: side panels instead of a floating card
+User feedback after seeing the card: wanted a fixed-position "left panel / right panel, camera feed clear in the center" HUD layout instead of a card that appears next to/over the tracked object (which can obscure it and moves around as the object moves in frame). Implemented:
+- New `draw_side_panel()` in `overlay.py`: generic helper, anchors a semi-transparent panel to the left or right screen edge at a fixed vertical position (not tied to any bbox), with a bright inner accent line on the edge facing the center for a sci-fi-HUD look.
+- `draw_machine_card()` rewritten to split its fields across two calls to this helper -- left panel: machine name/ID, status, running/downtime hours; right panel: production %, maintenance due, parts needing change, operator, fault reason -- instead of one card. The marker itself still gets a small corner-reticle outline (so it's still visually obvious what's being tracked), but no large card sits on top of it.
+- Function signature unchanged, so no caller (`main.py`, `draw_overlay`) needed updating -- purely an internal rendering change.
+- Verified visually (rendered to PNG, inspected) for the RUNNING, STOPPED+fault, and disconnected/no-telemetry states before deploying. Deployed to the board and demoed live on the physical screen via the same force-injection demo script.
+- Face cards (`draw_hud_card`) were intentionally left unchanged -- the request was specifically about "that dashboard" (the machine card just demoed), not a general redesign; revisit only if asked.

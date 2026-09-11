@@ -101,6 +101,53 @@ def draw_hud_card(
         cv2.putText(frame, "UNKNOWN SUBJECT", (card_x + int(8*scale_factor), card_y + int(22*scale_factor)), font, font_scale, COLOR_AMBER, th)
 
 
+def draw_side_panel(
+    frame: np.ndarray,
+    lines: List[Tuple[str, Tuple[int, int, int]]],
+    side: str,
+    accent_color: Tuple[int, int, int],
+    top_offset_frac: float = 0.10
+) -> None:
+    """Draw a semi-transparent HUD info panel anchored to the left or right edge of the
+    frame, so the center stays clear for the camera view (a fixed sci-fi-HUD layout
+    rather than a card that follows the tracked object around and can obscure it).
+
+    Args:
+        frame: BGR image array to draw onto.
+        lines: List of `(text, color)` tuples, one per line, top to bottom.
+        side: `"left"` or `"right"` -- which edge to anchor to.
+        accent_color: Border/accent color for this panel.
+        top_offset_frac: Vertical start position as a fraction of frame height.
+    """
+    if not lines:
+        return
+
+    img_h, img_w = frame.shape[:2]
+    scale_factor = img_w / 640.0
+
+    line_h = int(20 * scale_factor)
+    panel_w = int(215 * scale_factor)
+    panel_h = int(12 * scale_factor) + line_h * len(lines)
+    panel_y = int(img_h * top_offset_frac)
+    panel_x = int(10 * scale_factor) if side == "left" else img_w - panel_w - int(10 * scale_factor)
+
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (panel_x, panel_y), (panel_x + panel_w, panel_y + panel_h), COLOR_BG_DARK, -1)
+    cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+    cv2.rectangle(frame, (panel_x, panel_y), (panel_x + panel_w, panel_y + panel_h), accent_color, int(1 * scale_factor) or 1)
+
+    # Thicker accent line on the inner edge (facing the center) for a HUD look
+    inner_x = panel_x + panel_w if side == "left" else panel_x
+    cv2.line(frame, (inner_x, panel_y), (inner_x, panel_y + panel_h), accent_color, int(2 * scale_factor) or 2)
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.45 * scale_factor
+    th = int(1 * scale_factor) or 1
+    for i, (text, color) in enumerate(lines):
+        text_y = panel_y + int(20 * scale_factor) + i * line_h
+        cv2.putText(frame, text, (panel_x + int(8 * scale_factor), text_y), font, font_scale, color, th)
+
+
 def draw_machine_card(
     frame: np.ndarray,
     bbox: Tuple[int, int, int, int],
@@ -114,8 +161,9 @@ def draw_machine_card(
     operator_name: Optional[str] = None,
     connected: bool = True
 ) -> None:
-    """Draw a semi-transparent HUD card with live machine status + placeholder maintenance
-    data above/beside its marker.
+    """Draw machine status/maintenance info as fixed left/right HUD side panels, keeping
+    the center of the frame clear for the camera view, plus a small reticle on the
+    marker itself so it's still clear what's being tracked.
 
     Args:
         frame: BGR image array to draw onto.
@@ -135,7 +183,8 @@ def draw_machine_card(
     x, y, w, h = bbox
     accent_color = COLOR_ORANGE if connected else COLOR_AMBER
 
-    # Draw bounding box corner reticles, same style as face cards for a consistent HUD look
+    # Small reticle on the marker itself (unobtrusive -- the detailed info lives in the
+    # side panels, not a card overlapping the machine/camera view here).
     line_len = max(10, min(w, h) // 4)
     thickness = 2
     cv2.line(frame, (x, y), (x + line_len, y), accent_color, thickness)
@@ -147,59 +196,41 @@ def draw_machine_card(
     cv2.line(frame, (x + w, y + h), (x + w - line_len, y + h), accent_color, thickness)
     cv2.line(frame, (x + w, y + h), (x + w, y + h - line_len), accent_color, thickness)
 
-    img_h, img_w = frame.shape[:2]
-    scale_factor = img_w / 640.0
-
-    lines: List[Tuple[str, Tuple[int, int, int]]] = [
-        (f"MACHINE: {machine_name} ({machine_id})", COLOR_WHITE)
-    ]
-
     status: Optional[str] = None
+    left_lines: List[Tuple[str, Tuple[int, int, int]]] = [
+        (f"MACHINE: {machine_name}", COLOR_WHITE),
+        (f"ID: {machine_id}", COLOR_WHITE),
+    ]
     if not connected or telemetry is None:
-        lines.append(("NO LIVE STATUS (MQTT unreachable)", COLOR_AMBER))
+        left_lines.append(("NO LIVE STATUS", COLOR_AMBER))
+        left_lines.append(("(MQTT unreachable)", COLOR_AMBER))
     else:
         status = telemetry.get("status", "UNKNOWN")
         status_color = COLOR_GREEN if status == "RUNNING" else COLOR_RED
-        lines.append((f"STATUS: {status}", status_color))
+        left_lines.append((f"STATUS: {status}", status_color))
         running_h = telemetry.get("running_hours", 0.0)
         stopped_h = telemetry.get("stopped_hours", 0.0)
-        lines.append((f"RUN: {running_h:.1f}h  DOWN: {stopped_h:.1f}h", COLOR_CYAN))
+        left_lines.append((f"RUN:  {running_h:.1f}h", COLOR_CYAN))
+        left_lines.append((f"DOWN: {stopped_h:.1f}h", COLOR_CYAN))
 
-    lines.append((f"PROD: {production_pct:.0f}%  MAINT DUE: {next_maintenance_due}", COLOR_GREEN))
-
+    right_lines: List[Tuple[str, Tuple[int, int, int]]] = [
+        (f"PROD: {production_pct:.0f}%", COLOR_GREEN),
+        (f"MAINT DUE: {next_maintenance_due}", COLOR_GREEN),
+    ]
     needs_change = [p.get("name", "?") for p in (parts or []) if p.get("needs_change")]
     if needs_change:
-        lines.append((f"PARTS DUE: {', '.join(needs_change)}", COLOR_AMBER))
+        right_lines.append(("PARTS DUE:", COLOR_AMBER))
+        for part_name in needs_change:
+            right_lines.append((f"  {part_name}", COLOR_AMBER))
     else:
-        lines.append(("PARTS: OK", COLOR_GREEN))
-
+        right_lines.append(("PARTS: OK", COLOR_GREEN))
     if operator_name:
-        lines.append((f"OPERATOR: {operator_name}", COLOR_WHITE))
-
+        right_lines.append((f"OPERATOR: {operator_name}", COLOR_WHITE))
     if status == "STOPPED" and fault_reason and fault_reason != "TBD":
-        lines.append((f"FAULT: {fault_reason}", COLOR_RED))
+        right_lines.append((f"FAULT: {fault_reason}", COLOR_RED))
 
-    line_h = int(18 * scale_factor)
-    card_w = int(max(260 * scale_factor, w + (40 * scale_factor)))
-    card_h = int(10 * scale_factor) + line_h * len(lines)
-    card_x = max(5, x)
-    card_y = max(5, y - card_h - int(10 * scale_factor))
-    if card_y < 0:
-        card_y = y + h + int(10 * scale_factor)
-    if card_x + card_w > img_w:
-        card_x = max(5, img_w - card_w - 5)
-
-    overlay = frame.copy()
-    cv2.rectangle(overlay, (card_x, card_y), (card_x + card_w, card_y + card_h), COLOR_BG_DARK, -1)
-    cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
-    cv2.rectangle(frame, (card_x, card_y), (card_x + card_w, card_y + card_h), accent_color, int(1 * scale_factor) or 1)
-
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.45 * scale_factor
-    th = int(1 * scale_factor) or 1
-    for i, (text, color) in enumerate(lines):
-        text_y = card_y + int(18 * scale_factor) + i * line_h
-        cv2.putText(frame, text, (card_x + int(8 * scale_factor), text_y), font, font_scale, color, th)
+    draw_side_panel(frame, left_lines, side="left", accent_color=accent_color)
+    draw_side_panel(frame, right_lines, side="right", accent_color=accent_color)
 
 
 def draw_fps_counter(frame: np.ndarray, fps: float) -> None:
