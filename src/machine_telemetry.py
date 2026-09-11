@@ -28,6 +28,47 @@ RUNNING_STATE_VALUES = {"RUNNING", "RUN", "ON", "1", "TRUE", "START", "STARTED"}
 # the underlying MQTT socket is technically still open (broker/publisher could be idle).
 STALE_AFTER_S = 30.0
 
+# Candidate field names (checked case-insensitively) to look for the running/stopped
+# indicator inside a JSON payload, in priority order.
+STATUS_FIELD_NAMES = ("status", "state", "run_state", "running", "machine_status")
+
+
+def _extract_status_value(raw: str) -> str:
+    """Pull the running/stopped indicator out of a raw MQTT payload.
+
+    The exact payload format for a given status topic isn't always known in advance --
+    some publish a bare string ("RUNNING"), others bundle multiple fields into one JSON
+    message (the "data" in a topic like "aries/bottlefeeder/data" suggests this). If the
+    payload parses as a JSON object, look for a plausible status field inside it (any of
+    STATUS_FIELD_NAMES, case-insensitive) and use *that* value instead of the raw
+    payload -- otherwise a bundled JSON message would never match a plain RUNNING/STOPPED
+    string comparison and the machine would silently appear permanently STOPPED.
+
+    Args:
+        raw: Decoded MQTT payload string.
+
+    Returns:
+        The string to compare against `RUNNING_STATE_VALUES` (uppercased comparison
+        happens in `_apply_status_message`).
+    """
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return raw
+
+    if not isinstance(parsed, dict):
+        return raw
+
+    lower_map = {str(k).lower(): v for k, v in parsed.items()}
+    for field in STATUS_FIELD_NAMES:
+        if field in lower_map:
+            return str(lower_map[field])
+
+    logger.warning(
+        f"JSON payload has no recognizable status field (checked {STATUS_FIELD_NAMES}): {raw!r}"
+    )
+    return raw
+
 
 class MachineTelemetryClient:
     """Subscribes to one machine's MQTT start/stop topic and accumulates run/down hours."""
@@ -141,7 +182,7 @@ class MachineTelemetryClient:
             value = msg.payload.decode("utf-8", errors="replace").strip()
         except Exception:
             return
-        self._apply_status_message(value, time.time())
+        self._apply_status_message(_extract_status_value(value), time.time())
 
     def _apply_status_message(self, value: str, now: float) -> None:
         """Update running/stopped state from a decoded status-topic payload. Split out

@@ -14,7 +14,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from machine_telemetry import MachineTelemetryClient, RUNNING_STATE_VALUES
+from machine_telemetry import MachineTelemetryClient, RUNNING_STATE_VALUES, _extract_status_value
 
 
 @pytest.fixture
@@ -96,3 +96,50 @@ class TestMachineTelemetryClient:
     def test_running_state_values_constant_is_reasonable(self) -> None:
         assert "RUNNING" in RUNNING_STATE_VALUES
         assert "STOPPED" not in RUNNING_STATE_VALUES
+
+
+class TestExtractStatusValue:
+    """Test suite for pulling a status indicator out of a raw MQTT payload -- covers the
+    real risk that a topic bundling multiple fields into one JSON message (as the topic
+    name "aries/bottlefeeder/data" suggests) would otherwise never match a plain
+    RUNNING/STOPPED string comparison and silently look permanently STOPPED."""
+
+    def test_plain_string_passed_through(self) -> None:
+        assert _extract_status_value("RUNNING") == "RUNNING"
+        assert _extract_status_value("STOPPED") == "STOPPED"
+
+    def test_json_with_status_field(self) -> None:
+        assert _extract_status_value('{"status": "RUNNING", "speed": 5.2}') == "RUNNING"
+
+    def test_json_with_alternate_field_name(self) -> None:
+        assert _extract_status_value('{"state": "STOPPED"}') == "STOPPED"
+        assert _extract_status_value('{"run_state": "RUNNING"}') == "RUNNING"
+
+    def test_json_field_name_case_insensitive(self) -> None:
+        assert _extract_status_value('{"STATUS": "RUNNING"}') == "RUNNING"
+
+    def test_json_boolean_field_value(self) -> None:
+        # str(True) == "TRUE", which is in RUNNING_STATE_VALUES -- booleans work
+        # naturally without special-casing.
+        assert _extract_status_value('{"running": true}') == "True"
+
+    def test_json_numeric_field_value(self) -> None:
+        assert _extract_status_value('{"status": 1}') == "1"
+
+    def test_json_with_no_recognizable_field_returns_raw(self) -> None:
+        raw = '{"speed": 5.2, "temperature": 40}'
+        assert _extract_status_value(raw) == raw
+
+    def test_invalid_json_returns_raw_string(self) -> None:
+        assert _extract_status_value("not json at all") == "not json at all"
+
+    def test_json_array_returns_raw(self) -> None:
+        raw = '["RUNNING", "extra"]'
+        assert _extract_status_value(raw) == raw
+
+    def test_end_to_end_json_payload_via_apply_status_message(self, tmp_hours_dir) -> None:
+        """The actual bug this defends against: a bundled JSON payload must still be
+        correctly recognized as RUNNING, not silently treated as STOPPED forever."""
+        client = MachineTelemetryClient("m1", hours_state_dir=tmp_hours_dir)
+        client._apply_status_message(_extract_status_value('{"status": "RUNNING", "speed": 5.2}'), time.time())
+        assert client.get_latest_state()["status"] == "RUNNING"
