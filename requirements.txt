@@ -11,3 +11,6 @@ pytest>=7.0.0
 
 # MQTT client for live machine running/stopped status (machine HUD feature)
 paho-mqtt>=2.0.0
+
+# Sharper anti-aliased text/badges for the machine dashboard side panels
+Pillow>=10.0.0
