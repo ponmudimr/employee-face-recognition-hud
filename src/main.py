@@ -161,6 +161,9 @@ class PipelineManager:
         self.prof_disp = []
         self.det_count = 0
         self.trk_count = 0
+        # Debounce state for the quit-key check below: require the same
+        # quit key on two consecutive polls before actually exiting.
+        pending_quit_key = None
 
         try:
             while True:
@@ -242,7 +245,20 @@ class PipelineManager:
                     self.display.show(output_frame)
                     key = self.display.poll_key(delay_ms=1)
                     if key == ord('q') or key == 27:
-                        break
+                        # Debounced: a single stray read (observed intermittently
+                        # right at startup under camera+detection load, cause not
+                        # pinned down, not reproducible in isolation) must not be
+                        # enough to kill an unattended headset. A real keypress
+                        # trivially satisfies "seen on two consecutive polls" --
+                        # X11 key auto-repeat alone guarantees it well within a
+                        # human's reaction time to let go.
+                        if pending_quit_key == key:
+                            logger.info(f"Quit key {key} confirmed on two consecutive polls. Exiting.")
+                            break
+                        logger.debug(f"Quit key candidate {key} seen once, awaiting confirmation.")
+                        pending_quit_key = key
+                    else:
+                        pending_quit_key = None
                 self.prof_disp.append((time.perf_counter() - t0) * 1000)
                 
                 # We stop after 150 frames to simulate 15 seconds at 10 fps or something
