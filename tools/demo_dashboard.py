@@ -30,7 +30,7 @@ FAKE_MACHINE = {
     "marker_id": 0,
     "name": "Bottle Filling Line 1",
     "machine_id": "MCH-001",
-    "operator_name": "Demo Operator",
+    "operator_name": "Dinesh",
     "production_pct": 87.0,
     "parts": [
         {"name": "Sample Part A", "life_pct": 80, "needs_change": False},
