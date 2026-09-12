@@ -310,8 +310,10 @@ def draw_machine_card(
         left_kv.append(("RUN", f"{running_h:.1f}h", PANEL_CYAN))
         left_kv.append(("DOWN", f"{stopped_h:.1f}h", PANEL_CYAN))
 
+    bottles_filled = telemetry.get("bottles_filled", 0.0) if telemetry else 0.0
     right_kv: List[Tuple[str, str, Tuple[int, int, int]]] = [
         ("PRODUCTION", f"{production_pct:.0f}%", PANEL_GREEN),
+        ("FILLED", f"{bottles_filled:.0f}", PANEL_CYAN),
         ("MAINT DUE", next_maintenance_due, PANEL_GREEN),
     ]
     needs_change = [p.get("name", "?") for p in (parts or []) if p.get("needs_change")]

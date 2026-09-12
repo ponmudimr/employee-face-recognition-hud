@@ -34,11 +34,11 @@ FAKE_MACHINE = {
     "production_pct": 87.0,
     "parts": [
         {"name": "Sample Part A", "life_pct": 80, "needs_change": False},
-        {"name": "Sample Part B", "life_pct": 15, "needs_change": True}
+        {"name": "Water Pump", "life_pct": 15, "needs_change": True}
     ],
     "next_maintenance_due": "2026-09-20",
     "fault_reason": "TBD",
-    "telemetry": {"status": "RUNNING", "running_hours": 128.7, "stopped_hours": 12.3},
+    "telemetry": {"status": "RUNNING", "running_hours": 128.7, "stopped_hours": 12.3, "bottles_filled": 4820},
     "connected": True
 }
 

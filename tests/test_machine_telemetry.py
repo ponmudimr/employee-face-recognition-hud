@@ -14,7 +14,12 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from machine_telemetry import MachineTelemetryClient, RUNNING_STATE_VALUES, _extract_status_value
+from machine_telemetry import (
+    MachineTelemetryClient,
+    RUNNING_STATE_VALUES,
+    _extract_status_value,
+    _extract_status_and_count,
+)
 
 
 @pytest.fixture
@@ -143,3 +148,46 @@ class TestExtractStatusValue:
         client = MachineTelemetryClient("m1", hours_state_dir=tmp_hours_dir)
         client._apply_status_message(_extract_status_value('{"status": "RUNNING", "speed": 5.2}'), time.time())
         assert client.get_latest_state()["status"] == "RUNNING"
+
+
+class TestExtractStatusAndCount:
+    """Test suite for the real 'aries/bottlefeeder/data' payload format: a plain
+    delimited string where the first number is on/off state and the last number is
+    the running total of bottles filled (e.g. "1,4820"), not JSON."""
+
+    def test_comma_delimited_running_with_count(self) -> None:
+        assert _extract_status_and_count("1,4820") == ("1", 4820.0)
+
+    def test_space_delimited_stopped_with_count(self) -> None:
+        assert _extract_status_and_count("0 4820") == ("0", 4820.0)
+
+    def test_single_number_only_no_count(self) -> None:
+        assert _extract_status_and_count("1") == ("1", None)
+
+    def test_plain_string_status_no_numbers(self) -> None:
+        assert _extract_status_and_count("RUNNING") == ("RUNNING", None)
+
+    def test_json_payload_with_count_field(self) -> None:
+        status, count = _extract_status_and_count('{"status": "RUNNING", "bottle_count": 4820}')
+        assert status == "RUNNING"
+        assert count == 4820.0
+
+    def test_json_payload_without_count_field(self) -> None:
+        status, count = _extract_status_and_count('{"status": "RUNNING"}')
+        assert status == "RUNNING"
+        assert count is None
+
+    def test_end_to_end_bottle_count_reaches_latest_state(self, tmp_hours_dir) -> None:
+        client = MachineTelemetryClient("m1", hours_state_dir=tmp_hours_dir)
+        status, count = _extract_status_and_count("1,4820")
+        client._apply_status_message(status, time.time(), bottle_count=count)
+        state = client.get_latest_state()
+        assert state["status"] == "RUNNING"
+        assert state["bottles_filled"] == 4820.0
+
+    def test_bottle_count_persists_after_status_change_without_new_count(self, tmp_hours_dir) -> None:
+        """A later message with no parseable count shouldn't wipe out the last known count."""
+        client = MachineTelemetryClient("m1", hours_state_dir=tmp_hours_dir)
+        client._apply_status_message("RUNNING", time.time(), bottle_count=4820.0)
+        client._apply_status_message("STOPPED", time.time() + 10, bottle_count=None)
+        assert client.get_latest_state()["bottles_filled"] == 4820.0

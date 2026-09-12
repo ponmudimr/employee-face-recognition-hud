@@ -13,9 +13,10 @@ machines.json, not something this client is responsible for.
 import json
 import logging
 import os
+import re
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 import paho.mqtt.client as mqtt
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,10 @@ STALE_AFTER_S = 30.0
 # Candidate field names (checked case-insensitively) to look for the running/stopped
 # indicator inside a JSON payload, in priority order.
 STATUS_FIELD_NAMES = ("status", "state", "run_state", "running", "machine_status")
+
+# Candidate field names (checked case-insensitively) to look for a bottle/parts
+# produced count inside a JSON payload, in priority order.
+COUNT_FIELD_NAMES = ("bottle_count", "bottles_filled", "bottles", "count", "parts_produced", "produced")
 
 
 def _extract_status_value(raw: str) -> str:
@@ -70,6 +75,54 @@ def _extract_status_value(raw: str) -> str:
     return raw
 
 
+def _extract_status_and_count(raw: str) -> Tuple[str, Optional[float]]:
+    """Pull both the running/stopped indicator and a bottle/parts-produced count out
+    of a raw MQTT payload.
+
+    The real "aries/bottlefeeder/data" topic sends a plain delimited payload rather
+    than JSON: the first number is the on/off state (1/0) and the last number is the
+    running total of bottles filled (e.g. "1,4820" or "1 4820"). A JSON payload is
+    also supported defensively (see `_extract_status_value`), checking
+    `COUNT_FIELD_NAMES` for the count in that case.
+
+    Args:
+        raw: Decoded MQTT payload string.
+
+    Returns:
+        `(status_value, bottle_count)` -- `status_value` is what `_apply_status_message`
+        compares against `RUNNING_STATE_VALUES`; `bottle_count` is `None` if no count
+        could be determined from this payload.
+    """
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        parsed = None
+
+    if isinstance(parsed, dict):
+        status = _extract_status_value(raw)
+        count: Optional[float] = None
+        lower_map = {str(k).lower(): v for k, v in parsed.items()}
+        for field in COUNT_FIELD_NAMES:
+            if field in lower_map:
+                try:
+                    count = float(lower_map[field])
+                except (TypeError, ValueError):
+                    pass
+                break
+        return status, count
+
+    # Plain payload, e.g. "1,4820" or "1 4820" -- not JSON.
+    numbers = re.findall(r"-?\d+\.?\d*", raw)
+    if len(numbers) >= 2:
+        try:
+            return numbers[0], float(numbers[-1])
+        except ValueError:
+            return numbers[0], None
+    if len(numbers) == 1:
+        return numbers[0], None
+    return raw, None
+
+
 class MachineTelemetryClient:
     """Subscribes to one machine's MQTT start/stop topic and accumulates run/down hours."""
 
@@ -102,6 +155,7 @@ class MachineTelemetryClient:
         self._running_hours_base = 0.0
         self._stopped_hours_base = 0.0
         self._last_message_time: Optional[float] = None
+        self._bottle_count: Optional[float] = None
 
         self._load_persisted_hours()
 
@@ -182,15 +236,19 @@ class MachineTelemetryClient:
             value = msg.payload.decode("utf-8", errors="replace").strip()
         except Exception:
             return
-        self._apply_status_message(_extract_status_value(value), time.time())
+        status_value, bottle_count = _extract_status_and_count(value)
+        self._apply_status_message(status_value, time.time(), bottle_count=bottle_count)
 
-    def _apply_status_message(self, value: str, now: float) -> None:
-        """Update running/stopped state from a decoded status-topic payload. Split out
-        from `_on_message` so it's directly unit-testable without a real MQTT message."""
+    def _apply_status_message(self, value: str, now: float, bottle_count: Optional[float] = None) -> None:
+        """Update running/stopped state (and, if provided, the latest bottle count)
+        from a decoded status-topic payload. Split out from `_on_message` so it's
+        directly unit-testable without a real MQTT message."""
         new_status = "RUNNING" if value.upper() in RUNNING_STATE_VALUES else "STOPPED"
 
         with self._lock:
             self._last_message_time = now
+            if bottle_count is not None:
+                self._bottle_count = bottle_count
             if self._status is None:
                 # First message ever seen: start the clock, don't backdate any hours.
                 self._status = new_status
@@ -227,6 +285,7 @@ class MachineTelemetryClient:
                 "status": self._status,
                 "running_hours": running_hours,
                 "stopped_hours": stopped_hours,
+                "bottles_filled": self._bottle_count if self._bottle_count is not None else 0.0,
             }
 
     def is_connected(self) -> bool:
