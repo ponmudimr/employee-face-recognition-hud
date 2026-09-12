@@ -4,8 +4,12 @@ cv2.setNumThreads(4)
 
 import argparse
 import atexit
+import glob
 import logging
+import re
+import select
 import signal
+import struct
 import sys
 import time
 import threading
@@ -33,6 +37,82 @@ logger = logging.getLogger("HUD-Main")
 # (hand shake, marker turned away for a moment) without the card flickering
 # on/off, and guarantees a stable on-screen window for demos.
 MACHINE_DISPLAY_HOLD_S = 30.0
+
+
+# Raw evdev struct input_event layout on 64-bit Linux: 8-byte tv_sec, 8-byte
+# tv_usec, 2-byte type, 2-byte code, 4-byte value = 24 bytes, no padding.
+_INPUT_EVENT_FORMAT = "qqHHi"
+_INPUT_EVENT_SIZE = struct.calcsize(_INPUT_EVENT_FORMAT)
+_EV_KEY = 0x01
+_KEY_ESC = 1
+_KEY_Q = 16
+
+
+def _find_keyboard_event_devices() -> List[str]:
+    """Return /dev/input/eventN paths for every input device the kernel tagged with
+    a "kbd" handler (i.e. anything that can send key events -- covers a keyboard's
+    separate USB HID interfaces, like a wired keyboard's main keys plus its
+    consumer-control/system-control interfaces)."""
+    try:
+        with open("/proc/bus/input/devices", "r", encoding="utf-8", errors="replace") as f:
+            devices_text = f.read()
+    except Exception as e:
+        logger.warning(f"Could not read /proc/bus/input/devices: {e}")
+        return []
+
+    paths = []
+    for block in devices_text.split("\n\n"):
+        if "kbd" not in block:
+            continue
+        match = re.search(r"event(\d+)", block)
+        if match:
+            paths.append(f"/dev/input/event{match.group(1)}")
+    return paths
+
+
+def _watch_physical_keyboard(quit_event: threading.Event, stop_event: threading.Event) -> None:
+    """Background thread: read raw kernel key events directly from /dev/input, so
+    Esc/'q' reliably exits the HUD even if the fullscreen OpenCV display window
+    never actually holds X11 keyboard focus (an intermittent issue on this board's
+    window manager -- see PROJECT_DOCUMENTATION.md) and cv2.waitKey() never sees
+    the press at all.
+    """
+    device_paths = _find_keyboard_event_devices()
+    if not device_paths:
+        logger.warning("No keyboard input devices found for physical quit-key watcher.")
+        return
+
+    fds = {}
+    for path in device_paths:
+        try:
+            fds[open(path, "rb", buffering=0)] = path
+        except Exception as e:
+            logger.debug(f"Could not open {path} for quit-key watching: {e}")
+    if not fds:
+        logger.warning("Found keyboard device entries but could not open any of them.")
+        return
+
+    logger.info(f"Physical quit-key watcher active on: {list(fds.values())}")
+    try:
+        while not stop_event.is_set():
+            readable, _, _ = select.select(list(fds.keys()), [], [], 0.5)
+            for f in readable:
+                try:
+                    data = f.read(_INPUT_EVENT_SIZE)
+                except Exception:
+                    continue
+                if not data or len(data) < _INPUT_EVENT_SIZE:
+                    continue
+                _, _, ev_type, ev_code, ev_value = struct.unpack(_INPUT_EVENT_FORMAT, data)
+                if ev_type == _EV_KEY and ev_value == 1 and ev_code in (_KEY_ESC, _KEY_Q):
+                    logger.info(f"Physical quit key (evdev code {ev_code}) pressed. Requesting exit.")
+                    quit_event.set()
+    finally:
+        for f in fds:
+            try:
+                f.close()
+            except Exception:
+                pass
 
 
 def create_opencv_tracker() -> Optional[Any]:
@@ -115,6 +195,13 @@ class PipelineManager:
         self.thread_lock = threading.Lock()
         self.detect_thread = None
 
+        # Set by the background physical-keyboard watcher (see _watch_physical_keyboard)
+        # when Esc/'q' is pressed, independent of whether the display window has
+        # X11 keyboard focus.
+        self._physical_quit_event = threading.Event()
+        self._keyboard_watch_stop = threading.Event()
+        self._keyboard_watch_thread: Optional[threading.Thread] = None
+
     def start(self) -> None:
         """Execute the real-time face recognition pipeline loop."""
         logger.info("Initializing Employee Face Recognition HUD system...")
@@ -145,6 +232,13 @@ class PipelineManager:
         except (ValueError, Exception):
             pass
         atexit.register(self.cleanup)
+
+        self._keyboard_watch_thread = threading.Thread(
+            target=_watch_physical_keyboard,
+            args=(self._physical_quit_event, self._keyboard_watch_stop),
+            daemon=True
+        )
+        self._keyboard_watch_thread.start()
 
         # Initialize display if not headless mode
         if self.display is not None:
@@ -269,10 +363,17 @@ class PipelineManager:
                     else:
                         pending_quit_key = None
                 self.prof_disp.append((time.perf_counter() - t0) * 1000)
-                
+
+                # Physical keyboard watcher (see _watch_physical_keyboard) caught Esc/'q'
+                # directly at the kernel level -- trust it immediately, no debounce needed,
+                # since it can't produce the spurious single-read cv2.waitKey() can.
+                if self._physical_quit_event.is_set():
+                    logger.info("Physical quit key confirmed via kernel input watcher. Exiting.")
+                    break
+
                 # We stop after 150 frames to simulate 15 seconds at 10 fps or something
                 # Or just run for 15 seconds
-                
+
         except KeyboardInterrupt:
             logger.info("Interrupt signal received. Exiting HUD pipeline.")
         finally:
@@ -529,6 +630,9 @@ class PipelineManager:
     def cleanup(self) -> None:
         """Release hardware capture and display resources cleanly."""
         logger.info("Cleaning up pipeline hardware resources...")
+        self._keyboard_watch_stop.set()
+        if self._keyboard_watch_thread is not None:
+            self._keyboard_watch_thread.join(timeout=2.0)
         self.cap.release()
         if self.display is not None:
             self.display.close()
