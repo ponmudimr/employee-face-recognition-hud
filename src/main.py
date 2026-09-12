@@ -28,6 +28,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("HUD-Main")
 
+# Once a registered machine marker is seen, keep showing its dashboard card for
+# this long after it drops out of view -- covers brief occlusion/angle loss
+# (hand shake, marker turned away for a moment) without the card flickering
+# on/off, and guarantees a stable on-screen window for demos.
+MACHINE_DISPLAY_HOLD_S = 30.0
+
 
 def create_opencv_tracker() -> Optional[Any]:
     return cv2.legacy.TrackerMOSSE_create() if hasattr(cv2, "legacy") and hasattr(cv2.legacy, "TrackerMOSSE_create") else cv2.TrackerKCF_create() if hasattr(cv2, "TrackerKCF_create") else None
@@ -101,6 +107,9 @@ class PipelineManager:
         # keyed by ArUco marker ID -- started lazily the first time its
         # marker is detected, then left running for the pipeline's lifetime.
         self.telemetry_clients: Dict[int, MachineTelemetryClient] = {}
+        # Wall-clock time a registered machine marker was last actually seen --
+        # drives the MACHINE_DISPLAY_HOLD_S grace period before clearing the card.
+        self._machine_last_seen_time: Optional[float] = None
 
         self.pipeline_frame_count = 0
         self.thread_lock = threading.Lock()
@@ -393,9 +402,7 @@ class PipelineManager:
             logger.info("ArUco: 0 markers seen this cycle")
 
         if not markers:
-            with self.thread_lock:
-                self.tracked_machines = []
-                self.machine_trackers = []
+            self._clear_machines_if_hold_expired()
             return
 
         operator_name: Optional[str] = None
@@ -454,6 +461,25 @@ class PipelineManager:
             with self.thread_lock:
                 self.tracked_machines = list(new_tracked_machines)
                 self.machine_trackers = list(new_machine_trackers)
+                self._machine_last_seen_time = time.time()
+
+        if not new_tracked_machines:
+            # Markers were seen this cycle, but none matched a registered
+            # machine -- treat the same as "no markers" for the hold timer.
+            self._clear_machines_if_hold_expired()
+
+    def _clear_machines_if_hold_expired(self) -> None:
+        """Clear the tracked-machine dashboard only after MACHINE_DISPLAY_HOLD_S has
+        passed with no registered marker seen, instead of instantly on the first
+        missed cycle -- keeps the card from flickering off on brief occlusion or
+        a marker turned slightly out of view."""
+        with self.thread_lock:
+            if self._machine_last_seen_time is None:
+                return
+            if time.time() - self._machine_last_seen_time >= MACHINE_DISPLAY_HOLD_S:
+                self.tracked_machines = []
+                self.machine_trackers = []
+                self._machine_last_seen_time = None
 
     def _run_tracking(self, frame: np.ndarray) -> None:
         updated_faces = []
@@ -480,18 +506,23 @@ class PipelineManager:
             updated_machine_trackers = []
             for i, tracker in enumerate(self.machine_trackers):
                 machine_data = self.tracked_machines[i]
+                new_tracker = None
                 if tracker is not None:
                     try:
                         success, box = tracker.update(frame)
                         if success:
                             x, y, w, h = [int(v) for v in box]
                             machine_data["bbox"] = (x, y, w, h)
-                            updated_machines.append(machine_data)
-                            updated_machine_trackers.append(tracker)
+                            new_tracker = tracker
                         else:
-                            logger.debug(f"Tracker update FAILED for machine at frame {self.pipeline_frame_count}")
+                            logger.debug(f"Tracker update FAILED for machine at frame {self.pipeline_frame_count}, holding last known position")
                     except Exception as e:
                         logger.debug(f"Machine tracker update error: {e}")
+                # Unlike faces, keep the entry even when its tracker fails or was never
+                # started -- MACHINE_DISPLAY_HOLD_S (enforced in _detect_and_track_machines)
+                # decides when the card actually disappears, not a single missed frame.
+                updated_machines.append(machine_data)
+                updated_machine_trackers.append(new_tracker)
             self.tracked_machines = updated_machines
             self.machine_trackers = updated_machine_trackers
 
